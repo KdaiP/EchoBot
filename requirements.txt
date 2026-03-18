@@ -8,7 +8,7 @@ Pillow
 
 # Memory
 agentscope
-reme-ai
+reme-ai[light] @ git+https://github.com/agentscope-ai/ReMe.git
 
 # Document processing
 # defusedxml
