@@ -1,10 +1,10 @@
-export function buildMarkdownFragment(markdownText) {
+export function buildMarkdownFragment(markdownText, depth = 0) {
     const normalizedText = String(markdownText || "").replace(/\r\n?/g, "\n");
     const lines = normalizedText.split("\n");
-    return buildBlocks(lines, 0).fragment;
+    return buildBlocks(lines, 0, depth).fragment;
 }
 
-function buildBlocks(lines, startIndex) {
+function buildBlocks(lines, startIndex, depth = 0) {
     const fragment = document.createDocumentFragment();
     let index = startIndex;
 
@@ -47,7 +47,7 @@ function buildBlocks(lines, startIndex) {
 
         if (isBlockquoteLine(lines[index])) {
             const blockquote = collectBlockquote(lines, index);
-            fragment.appendChild(createBlockquoteElement(blockquote.lines));
+            fragment.appendChild(createBlockquoteElement(blockquote.lines, depth));
             index = blockquote.nextIndex;
             continue;
         }
@@ -530,9 +530,17 @@ function createParagraphElement(lines) {
     return paragraph;
 }
 
-function createBlockquoteElement(lines) {
+function createBlockquoteElement(lines, depth = 0) {
     const blockquote = document.createElement("blockquote");
-    const content = buildMarkdownFragment(lines.join("\n"));
+    let content;
+    if (depth >= 20) {
+        const p = document.createElement("p");
+        p.textContent = lines.join("\n").replace(/^\s*>\s?/gm, "");
+        content = document.createDocumentFragment();
+        content.appendChild(p);
+    } else {
+        content = buildMarkdownFragment(lines.join("\n"), depth + 1);
+    }
     if (!content.childNodes.length) {
         const paragraph = document.createElement("p");
         blockquote.appendChild(paragraph);
@@ -623,8 +631,12 @@ function appendInlineLines(container, lines) {
     });
 }
 
-function appendInlineMarkdown(container, text) {
+function appendInlineMarkdown(container, text, depth = 0) {
     const source = String(text || "");
+    if (depth >= 50) {
+        container.appendChild(document.createTextNode(source));
+        return;
+    }
     let index = 0;
 
     while (index < source.length) {
@@ -639,7 +651,7 @@ function appendInlineMarkdown(container, text) {
             || parseAngleAutolinkToken(source, index)
             || parseBareUrlToken(source, index);
         if (linkToken) {
-            appendLinkToken(container, linkToken);
+            appendLinkToken(container, linkToken, depth);
             index += linkToken.length;
             continue;
         }
@@ -671,7 +683,7 @@ function appendInlineMarkdown(container, text) {
             || parseWrappedToken(source, index, "__");
         if (strongToken) {
             const strong = document.createElement("strong");
-            appendInlineMarkdown(strong, strongToken.content);
+            appendInlineMarkdown(strong, strongToken.content, depth + 1);
             container.appendChild(strong);
             index += strongToken.length;
             continue;
@@ -680,7 +692,7 @@ function appendInlineMarkdown(container, text) {
         const strikeToken = parseWrappedToken(source, index, "~~");
         if (strikeToken) {
             const deleted = document.createElement("del");
-            appendInlineMarkdown(deleted, strikeToken.content);
+            appendInlineMarkdown(deleted, strikeToken.content, depth + 1);
             container.appendChild(deleted);
             index += strikeToken.length;
             continue;
@@ -690,7 +702,7 @@ function appendInlineMarkdown(container, text) {
             || parseWrappedToken(source, index, "_");
         if (emphasisToken) {
             const emphasis = document.createElement("em");
-            appendInlineMarkdown(emphasis, emphasisToken.content);
+            appendInlineMarkdown(emphasis, emphasisToken.content, depth + 1);
             container.appendChild(emphasis);
             index += emphasisToken.length;
             continue;
@@ -912,7 +924,7 @@ function countCharacter(text, character) {
     return count;
 }
 
-function appendLinkToken(container, token) {
+function appendLinkToken(container, token, depth = 0) {
     const safeUrl = normalizeLinkUrl(token.url);
     if (!safeUrl) {
         container.appendChild(document.createTextNode(token.raw));
@@ -923,7 +935,7 @@ function appendLinkToken(container, token) {
     link.href = safeUrl;
     link.target = "_blank";
     link.rel = "noreferrer noopener";
-    appendInlineMarkdown(link, token.label);
+    appendInlineMarkdown(link, token.label, depth + 1);
     container.appendChild(link);
 }
 
