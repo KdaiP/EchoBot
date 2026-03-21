@@ -39,7 +39,7 @@ jobs:
         include:
           - os: windows-latest
             archive: echobot-windows-amd64.zip
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             archive: echobot-linux-amd64.tar.gz
     runs-on: ${{ matrix.os }}
     steps:
@@ -65,7 +65,7 @@ jobs:
       - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: Compress-Archive -Path dist/echobot/* -DestinationPath "${{ matrix.archive }}"
+        run: Compress-Archive -Path dist/echobot -DestinationPath "${{ matrix.archive }}"
 
       - name: Package (Linux)
         if: runner.os == 'Linux'
