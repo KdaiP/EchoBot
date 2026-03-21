@@ -30,7 +30,7 @@ jobs:
         run: pip install -r requirements.txt
 
       - name: Run tests
-        run: python -m pytest tests/ -v
+        run: python -m pytest -v
 
   build:
     needs: test
@@ -58,9 +58,9 @@ jobs:
       - name: Build executable
         run: pyinstaller echobot.spec --noconfirm
 
-      - name: Include .env.example
+      - name: Include .env template
         shell: bash
-        run: cp .env.example dist/echobot/.env.example
+        run: cp .env.example dist/echobot/.env
 
       - name: Package (Windows)
         if: runner.os == 'Windows'
