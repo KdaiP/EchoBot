@@ -1,0 +1,101 @@
+/* EchoBot 视频通话样式 */
+
+.video-call-controls {
+    display: flex;
+    gap: 10px;
+    padding: 12px;
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.video-call-controls button {
+    flex: 1;
+    padding: 10px 16px;
+    border: none;
+    border-radius: 6px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.video-call-controls .btn-primary {
+    background: #4CAF50;
+    color: white;
+}
+
+.video-call-controls .btn-primary:hover:not(:disabled) {
+    background: #45a049;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(76, 175, 80, 0.3);
+}
+
+.video-call-controls .btn-primary:disabled {
+    background: #cccccc;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.video-call-controls .btn-danger {
+    background: #f44336;
+    color: white;
+}
+
+.video-call-controls .btn-danger:hover:not(:disabled) {
+    background: #da190b;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(244, 67, 54, 0.3);
+}
+
+.video-call-controls .btn-danger:disabled {
+    background: #cccccc;
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
+.video-status {
+    grid-column: 1 / -1;
+    padding: 12px;
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 6px;
+    color: white;
+    font-size: 13px;
+    line-height: 1.6;
+}
+
+.vision-info {
+    margin: 0;
+}
+
+.vision-info p {
+    margin: 4px 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.vision-info p:first-child {
+    font-weight: 600;
+    color: #fff;
+}
+
+.vision-info p:last-child {
+    color: #e0e0e0;
+    font-size: 12px;
+}
+
+@media (max-width: 768px) {
+    .video-call-controls {
+        flex-direction: column;
+    }
+
+    .video-call-controls button {
+        width: 100%;
+    }
+
+    .video-status {
+        font-size: 12px;
+    }
+}

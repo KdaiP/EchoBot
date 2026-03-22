@@ -71,6 +71,7 @@ class ChatRequest(BaseModel):
     temperature: float | None = None
     max_tokens: int | None = None
     images: list["ChatImageInput"] = Field(default_factory=list)
+    vision_context: list[dict] = Field(default_factory=list)
 
 
 class ChatImageInput(BaseModel):

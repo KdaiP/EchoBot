@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EchoBot 摄像头</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0f;
+    color: #e0e0e0;
+    font-family: system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 20px;
+    gap: 16px;
+  }
+  h1 { font-size: 18px; color: #a0c4ff; margin-top: 10px; }
+  video {
+    width: 100%;
+    max-width: 480px;
+    border-radius: 12px;
+    background: #1a1a2e;
+    border: 1px solid #333;
+  }
+  .status {
+    font-size: 14px;
+    padding: 8px 16px;
+    border-radius: 20px;
+    background: #1a1a2e;
+    border: 1px solid #333;
+    min-width: 200px;
+    text-align: center;
+  }
+  .status.connected { border-color: #4caf50; color: #4caf50; }
+  .status.error { border-color: #f44336; color: #f44336; }
+  .status.sending { border-color: #a0c4ff; color: #a0c4ff; }
+  button {
+    padding: 12px 32px;
+    border-radius: 8px;
+    border: none;
+    background: #a0c4ff;
+    color: #0a0a0f;
+    font-size: 16px;
+    font-weight: 600;
+    cursor: pointer;
+    width: 100%;
+    max-width: 480px;
+  }
+  button:disabled { background: #333; color: #666; }
+  .fps { font-size: 12px; color: #666; }
+</style>
+</head>
+<body>
+<h1>📱 EchoBot 摄像头</h1>
+<video id="video" autoplay playsinline muted></video>
+<div id="status" class="status">等待启动…</div>
+<div id="fps" class="fps"></div>
+<div id="hint" hidden style="background:#1a1a2e;border:1px solid #f44336;border-radius:8px;padding:16px;max-width:480px;width:100%;font-size:13px;line-height:1.8;color:#ccc">
+  <b style="color:#f44336">需要开启安全来源白名单：</b><br>
+  <b>Chrome：</b>在地址栏输入<br>
+  <code style="background:#0a0a0f;padding:4px 8px;border-radius:4px;display:block;margin:4px 0;word-break:break-all">chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>
+  <b>Edge：</b>在地址栏输入<br>
+  <code style="background:#0a0a0f;padding:4px 8px;border-radius:4px;display:block;margin:4px 0;word-break:break-all">edge://flags/#unsafely-treat-insecure-origin-as-secure</code>
+  在输入框填入：<br>
+  <code style="background:#0a0a0f;padding:4px 8px;border-radius:4px;display:block;margin:6px 0">http://192.168.110.143:8000</code>
+  点击 <b>Enabled</b> → <b>Relaunch / Restart</b> 重启浏览器<br>
+  然后重新打开本页面
+</div>
+<button id="btn" onclick="start()">启动摄像头</button>
+<button id="flip-btn" onclick="flipCamera()" style="background:#2a2a3e;color:#a0c4ff;border:1px solid #a0c4ff;" disabled>🔄 切换前/后置</button>
+
+<script>
+const SERVER = 'ws://' + location.hostname + ':8000/api/web/video/stream';
+let ws = null;
+let frameCount = 0;
+let lastFpsTime = Date.now();
+
+const video = document.getElementById('video');
+const status = document.getElementById('status');
+const fps = document.getElementById('fps');
+const btn = document.getElementById('btn');
+
+const canvas = document.createElement('canvas');
+const ctx = canvas.getContext('2d');
+
+function setStatus(msg, cls) {
+    status.textContent = msg;
+    status.className = 'status ' + (cls || '');
+}
+
+let currentFacingMode = 'environment'; // 默认后置摄像头
+
+async function start() {
+    btn.disabled = true;
+    
+    // 检查安全上下文
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        setStatus('需要安全上下文，请按以下步骤操作：', 'error');
+        document.getElementById('hint').hidden = false;
+        btn.disabled = false;
+        return;
+    }
+    
+    setStatus('请求摄像头权限…');
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: currentFacingMode, width: 1280, height: 720 },
+            audio: false
+        });
+        video.srcObject = stream;
+        canvas.width = 640;
+        canvas.height = 360;
+        setStatus('连接服务器…');
+        await connectWS();
+        startCapture(stream);
+        btn.textContent = '停止';
+        btn.disabled = false;
+        btn.onclick = stop;
+        document.getElementById('flip-btn').disabled = false;
+    } catch(e) {
+        setStatus('失败: ' + e.message, 'error');
+        btn.disabled = false;
+    }
+}
+
+function connectWS() {
+    return new Promise((resolve, reject) => {
+        ws = new WebSocket(SERVER);
+        ws.onopen = () => { setStatus('已连接，发送中…', 'sending'); resolve(); };
+        ws.onerror = () => reject(new Error('WebSocket 连接失败，确认后端在运行'));
+        ws.onclose = () => setStatus('连接断开', 'error');
+    });
+}
+
+function startCapture() {
+    const tick = () => {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        // 保持原始宽高比
+        const vw = video.videoWidth || 640;
+        const vh = video.videoHeight || 360;
+        canvas.width = Math.min(vw, 640);
+        canvas.height = Math.round(canvas.width * vh / vw);
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob(blob => {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                ws.send(blob);
+                frameCount++;
+                const now = Date.now();
+                if (now - lastFpsTime >= 1000) {
+                    fps.textContent = frameCount + ' fps';
+                    frameCount = 0;
+                    lastFpsTime = now;
+                }
+            }
+        }, 'image/jpeg', 0.8);
+        setTimeout(tick, 500);  // 2fps，兼顾流量和实时性
+    };
+    tick();
+}
+
+function stop() {
+    if (ws) { ws.close(); ws = null; }
+    if (video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+        video.srcObject = null;
+    }
+    setStatus('已停止');
+    btn.textContent = '启动摄像头';
+    btn.onclick = start;
+    document.getElementById('flip-btn').disabled = true;
+}
+
+async function flipCamera() {
+    currentFacingMode = currentFacingMode === 'environment' ? 'user' : 'environment';
+    // 停止当前流
+    if (video.srcObject) {
+        video.srcObject.getTracks().forEach(t => t.stop());
+        video.srcObject = null;
+    }
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: currentFacingMode, width: 1280, height: 720 },
+            audio: false
+        });
+        video.srcObject = stream;
+        setStatus('已连接，发送中…', 'sending');
+    } catch(e) {
+        setStatus('切换失败: ' + e.message, 'error');
+    }
+}
+
+// 自动尝试连接
+window.onload = () => {
+    setStatus('后端: ' + location.hostname + ':8000');
+};
+</script>
+</body>
+</html>

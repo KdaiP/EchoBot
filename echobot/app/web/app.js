@@ -32,6 +32,7 @@ import {
     roundTo,
     smoothValue,
 } from "./modules/utils.js";
+import { createVideoCallIntegration } from "./modules/video-call-integration.js";
 
 const layout = createLayoutModule({
     addMessage: addMessage,
@@ -129,6 +130,11 @@ const chat = createChatModule({
     updateMessage: updateMessage,
 });
 
+const videoCall = createVideoCallIntegration({
+    addSystemMessage: addSystemMessage,
+    requestJson: requestJson,
+});
+
 document.addEventListener("DOMContentLoaded", initializePage);
 
 async function initializePage() {
@@ -160,6 +166,7 @@ async function initializePage() {
         asr.applyAsrStatus(config.asr);
         asr.startAsrStatusPolling();
         traces.resetTracePanel();
+        videoCall.initialize();
 
         setConnectionState("ready", "已连接");
         setRunStatus("准备就绪");
