@@ -9,15 +9,15 @@ import time
 import unittest
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import quote
 from unittest.mock import patch
+from urllib.parse import quote
 
-from fastapi.testclient import TestClient
 from PIL import Image
+from fastapi.testclient import TestClient
 
 from echobot import AgentCore, AgentTraceStore, LLMMessage, LLMResponse
-from echobot.asr import ASRStatusSnapshot, TranscriptionResult
 from echobot.app import create_app
+from echobot.asr import ASRStatusSnapshot, TranscriptionResult
 from echobot.channels import ChannelAddress
 from echobot.orchestration import (
     ConversationCoordinator,
@@ -27,9 +27,9 @@ from echobot.orchestration import (
 )
 from echobot.providers.base import LLMProvider
 from echobot.runtime.bootstrap import RuntimeContext, RuntimeOptions
-from echobot.runtime.settings import RuntimeSettingsStore
 from echobot.runtime.session_runner import SessionAgentRunner
 from echobot.runtime.sessions import SessionStore
+from echobot.runtime.settings import RuntimeSettingsStore
 from echobot.scheduling.cron import (
     CronJob,
     CronJobState,
@@ -40,7 +40,6 @@ from echobot.scheduling.cron import (
 )
 from echobot.scheduling.heartbeat import HeartbeatService
 from echobot.tts import SynthesizedSpeech, TTSProvider, TTSService, VoiceOption
-
 
 os.environ.setdefault("ECHOBOT_ASR_AUTO_DOWNLOAD", "false")
 
@@ -1459,7 +1458,7 @@ class AppApiTests(unittest.TestCase):
 
     def test_heartbeat_endpoint_returns_content_and_allows_updates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            workspace = Path(temp_dir)
+            workspace = Path(temp_dir).resolve()
             write_test_heartbeat_file(
                 workspace,
                 "# HEARTBEAT.md\n\n- [ ] Check inbox\n",

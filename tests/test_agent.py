@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from echobot.agent import AgentCore, AgentRunResult
 from echobot import build_default_system_prompt
+from echobot.agent import AgentCore, AgentRunResult
 from echobot.config import load_env_file
 from echobot.memory import (
     MemoryPreparationResult,
@@ -369,7 +369,7 @@ class SystemPromptTests(unittest.TestCase):
 
     def test_build_default_system_prompt_can_include_memory_section(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            workspace = Path(temp_dir)
+            workspace = Path(temp_dir).resolve()
 
             prompt = build_default_system_prompt(
                 workspace,
@@ -383,7 +383,7 @@ class SystemPromptTests(unittest.TestCase):
 
     def test_build_default_system_prompt_can_use_custom_memory_workspace(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            workspace = Path(temp_dir)
+            workspace = Path(temp_dir).resolve()
             memory_workspace = workspace / ".custom-memory"
 
             prompt = build_default_system_prompt(

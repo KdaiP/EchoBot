@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -309,6 +310,36 @@ class SkillRegistryTests(unittest.TestCase):
             active_skill_names = registry.active_skill_names_from_history(history)
 
             self.assertEqual(["demo-skill"], active_skill_names)
+
+    def test_discover_finds_skills_via_meipass(self) -> None:
+        with tempfile.TemporaryDirectory() as meipass_dir, \
+                tempfile.TemporaryDirectory() as project_dir:
+            meipass = Path(meipass_dir)
+            project_root = Path(project_dir)
+            write_skill(
+                meipass / "echobot" / "skills" / "bundled-skill",
+                name="bundled-skill",
+                description="from meipass",
+                body="bundled body",
+            )
+
+            original = getattr(sys, "_MEIPASS", None)
+            sys._MEIPASS = str(meipass)
+            try:
+                registry = SkillRegistry.discover(
+                    project_root=project_root,
+                    include_user_roots=False,
+                )
+            finally:
+                if original is None:
+                    del sys._MEIPASS
+                else:
+                    sys._MEIPASS = original
+
+            self.assertIn("bundled-skill", registry.names())
+            skill = registry.get("bundled-skill")
+            assert skill is not None
+            self.assertEqual("from meipass", skill.description)
 
 
 class SkillToolRuntimeTests(unittest.IsolatedAsyncioTestCase):
