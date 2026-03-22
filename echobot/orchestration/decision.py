@@ -78,6 +78,10 @@ AGENT_PATTERNS = (
     rf"{CHINESE_REQUEST_PREFIX}(使用|启用|安装|列出).*(技能|skill)",
     rf"{CHINESE_REQUEST_PREFIX}(使用|调用|运行|列出).*(工具|tool)",
     rf"{CHINESE_REQUEST_PREFIX}(记住|记下来|保存到记忆|存到记忆|查记忆|查一下记忆|搜索记忆)",
+    # 人脸识别相关
+    rf"{CHINESE_REQUEST_PREFIX}(记住我|记住我叫|我叫|这是|把我绑定|绑定.*人脸|绑定.*脸|人脸绑定|记下我的脸|记住我的脸)",
+    rf"{ENGLISH_REQUEST_PREFIX}(bind|remember|recognize).*(face|name|person)",
+    rf"{ENGLISH_REQUEST_PREFIX}(my name is|i am|i'm|this is)\s+\w+",
 )
 
 ROUTE_FIELD_PATTERN = re.compile(

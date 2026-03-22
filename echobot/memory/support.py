@@ -42,23 +42,41 @@ class ReMeLightSupport:
             if self._reme is not None:
                 return
 
-            reme = ReMeLight(
-                working_dir=str(self.settings.working_dir),
-                llm_api_key=self.settings.llm_api_key,
-                llm_base_url=self.settings.llm_base_url,
-                default_as_llm_config={
-                    "backend": "openai",
-                    "model_name": self.settings.llm_model,
-                },
-                default_file_store_config={
-                    "fts_enabled": self.settings.fts_enabled,
-                    "vector_enabled": self.settings.vector_enabled,
-                },
-                vector_weight=self.settings.vector_weight,
-                candidate_multiplier=self.settings.candidate_multiplier,
-                tool_result_threshold=self.settings.tool_result_threshold,
-                retention_days=self.settings.retention_days,
-            )
+            try:
+                reme = ReMeLight(
+                    working_dir=str(self.settings.working_dir),
+                    llm_api_key=self.settings.llm_api_key,
+                    llm_base_url=self.settings.llm_base_url,
+                    default_as_llm_config={
+                        "backend": "openai",
+                        "model_name": self.settings.llm_model,
+                    },
+                    default_file_store_config={
+                        "fts_enabled": self.settings.fts_enabled,
+                        "vector_enabled": self.settings.vector_enabled,
+                    },
+                    vector_weight=self.settings.vector_weight,
+                    candidate_multiplier=self.settings.candidate_multiplier,
+                    tool_result_threshold=self.settings.tool_result_threshold,
+                    retention_days=self.settings.retention_days,
+                )
+            except TypeError:
+                # 兼容旧版本 ReMeLight（不支持 tool_result_threshold / retention_days）
+                reme = ReMeLight(
+                    working_dir=str(self.settings.working_dir),
+                    llm_api_key=self.settings.llm_api_key,
+                    llm_base_url=self.settings.llm_base_url,
+                    default_as_llm_config={
+                        "backend": "openai",
+                        "model_name": self.settings.llm_model,
+                    },
+                    default_file_store_config={
+                        "fts_enabled": self.settings.fts_enabled,
+                        "vector_enabled": self.settings.vector_enabled,
+                    },
+                    vector_weight=self.settings.vector_weight,
+                    candidate_multiplier=self.settings.candidate_multiplier,
+                )
             await reme.start()
             await asyncio.to_thread(self._ensure_memory_files)
             self._reme = reme

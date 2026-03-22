@@ -36,6 +36,7 @@ class ChatService:
         image_urls: list[str] | None = None,
         role_name: str | None = None,
         route_mode: RouteMode | None = None,
+        transient_system_messages: list[str] | None = None,
     ) -> OrchestratedTurnResult:
         result = await self._coordinator.handle_user_turn(
             session_name,
@@ -43,6 +44,7 @@ class ChatService:
             image_urls=image_urls,
             role_name=role_name,
             route_mode=route_mode,
+            transient_system_messages=transient_system_messages,
         )
         await self._session_service.set_current_session(result.session.name)
         return result
@@ -56,6 +58,7 @@ class ChatService:
         role_name: str | None = None,
         route_mode: RouteMode | None = None,
         on_chunk: StreamCallback | None = None,
+        transient_system_messages: list[str] | None = None,
     ) -> OrchestratedTurnResult:
         result = await self._coordinator.handle_user_turn_stream(
             session_name,
@@ -64,6 +67,7 @@ class ChatService:
             role_name=role_name,
             route_mode=route_mode,
             on_chunk=on_chunk,
+            transient_system_messages=transient_system_messages,
         )
         await self._session_service.set_current_session(result.session.name)
         return result

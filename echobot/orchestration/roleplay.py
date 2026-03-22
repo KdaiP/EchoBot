@@ -137,15 +137,17 @@ class RoleplayEngine:
         image_urls: list[str] | None = None,
         role_card: RoleCard,
         on_chunk: StreamCallback,
+        transient_system_messages: list[str] | None = None,
     ) -> str:
+        extra = [_DIRECT_CHAT_INSTRUCTION]
+        if transient_system_messages:
+            extra = [*transient_system_messages, _DIRECT_CHAT_INSTRUCTION]
         return await self._stream_generate(
             session=session,
             user_input=user_input,
             image_urls=image_urls,
             role_card=role_card,
-            extra_system_messages=[
-                _DIRECT_CHAT_INSTRUCTION,
-            ],
+            extra_system_messages=extra,
             fallback_text="I am here.",
             on_chunk=on_chunk,
         )

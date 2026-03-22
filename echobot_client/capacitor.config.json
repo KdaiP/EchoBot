@@ -1,0 +1,13 @@
+{
+  "appId": "com.echobot.app",
+  "appName": "EchoBot",
+  "webDir": "../echobot/app/web",
+  "server": {
+    "androidScheme": "https",
+    "cleartext": true
+  },
+  "android": {
+    "allowMixedContent": true,
+    "webContentsDebuggingEnabled": true
+  }
+}

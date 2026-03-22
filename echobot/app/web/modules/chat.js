@@ -79,16 +79,27 @@ export function createChatModule(deps) {
         let streamedText = "";
 
         try {
+        // 拉取视觉上下文（始终启用，不依赖视频通话开关）
+        const visionResp = await fetch('/api/web/video/context').then(r => r.json()).catch(() => null);
+        const visionList = visionResp?.vision_list?.length ? visionResp.vision_list : null;
+
+            const chatPayload = {
+                prompt: prompt,
+                session_name: sessionName,
+                role_name: UI_STATE.currentRoleName || "default",
+                route_mode: UI_STATE.currentRouteMode || "auto",
+                images: composerImages.map((image) => ({
+                    data_url: image.dataUrl,
+                })),
+            };
+
+            // 如果有视觉数据，拼入上下文
+            if (visionList && visionList.length > 0) {
+                chatPayload.vision_context = visionList;
+            }
+
             const response = await requestChatStream(
-                {
-                    prompt: prompt,
-                    session_name: sessionName,
-                    role_name: UI_STATE.currentRoleName || "default",
-                    route_mode: UI_STATE.currentRouteMode || "auto",
-                    images: composerImages.map((image) => ({
-                        data_url: image.dataUrl,
-                    })),
-                },
+                chatPayload,
                 {
                     onChunk(delta) {
                         streamedText += delta;

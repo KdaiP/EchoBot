@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">EchoBot</string>
+    <string name="title_activity_main">EchoBot</string>
+    <string name="package_name">com.echobot.app</string>
+    <string name="custom_url_scheme">com.echobot.app</string>
+</resources>

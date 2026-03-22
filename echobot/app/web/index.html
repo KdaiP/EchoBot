@@ -191,6 +191,12 @@
                             <span>后台任务开始时先发提示</span>
                         </label>
                     </div>
+                    <div class="toggle-row">
+                        <label class="toggle-item">
+                            <input id="video-call-toggle" type="checkbox">
+                            <span>启用视频通话</span>
+                        </label>
+                    </div>
                     <details id="live2d-panel" class="stage-background-panel" open>
                         <summary class="stage-background-header">
                             <div class="stage-background-header-main">
@@ -749,5 +755,213 @@
     <script src="/web/assets/vendor/live2dcubismcore.min.js"></script>
     <script src="/web/assets/vendor/cubism4.min.js"></script>
     <script type="module" src="/web/assets/app.js"></script>
+    <script>
+    // 移动端自动折叠控制面板子面板，让对话框优先可见
+    (function() {
+        const isMobile = /Android|iPhone|iPad/i.test(navigator.userAgent)
+            || window.innerWidth < 768;
+        if (!isMobile) return;
+        document.addEventListener('DOMContentLoaded', function() {
+            // 折叠 settings-panel 内的子 details
+            ['live2d-panel', 'stage-background-panel', 'stage-effects-panel',
+             'cron-panel', 'heartbeat-panel'].forEach(function(id) {
+                var el = document.getElementById(id);
+                if (el) el.removeAttribute('open');
+            });
+            // settings-panel 本身保持折叠
+            var settings = document.getElementById('settings-panel');
+            if (settings) settings.removeAttribute('open');
+            // 滚动到消息区底部
+            setTimeout(function() {
+                var messages = document.getElementById('messages');
+                if (messages) messages.scrollTop = messages.scrollHeight;
+            }, 500);
+        });
+    })();
+
+    // 视觉调试悬浮面板 + 摄像头实时预览（始终可用）
+    (function() {
+        var listPanel = null;
+        var listTimer = null;
+        var listVisible = false;
+
+        var camPanel = null;
+        var camImg = null;
+        var camTimer = null;
+        var camVisible = false;
+
+        // ── 调试 List 按钮 ──
+        function createListBtn() {
+            var btn = document.createElement('button');
+            btn.textContent = '📋';
+            btn.title = '视觉描述列表';
+            Object.assign(btn.style, {
+                position: 'fixed', bottom: '16px', right: '64px',
+                width: '40px', height: '40px', borderRadius: '50%',
+                background: '#1a1a2e', border: '1px solid #a0c4ff',
+                color: '#a0c4ff', fontSize: '18px', cursor: 'pointer',
+                zIndex: '10000', boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+            });
+            btn.addEventListener('click', toggleListPanel);
+            document.body.appendChild(btn);
+        }
+
+        function toggleListPanel() {
+            if (listVisible) {
+                if (listPanel) { listPanel.remove(); listPanel = null; }
+                if (listTimer) { clearInterval(listTimer); listTimer = null; }
+                listVisible = false;
+            } else {
+                showListPanel();
+                listVisible = true;
+            }
+        }
+
+        function showListPanel() {
+            listPanel = document.createElement('div');
+            Object.assign(listPanel.style, {
+                position: 'fixed', bottom: '64px', right: '16px',
+                width: '340px', maxHeight: '320px',
+                background: 'rgba(10,10,20,0.95)',
+                border: '1px solid #a0c4ff', borderRadius: '8px',
+                padding: '10px', zIndex: '9999',
+                fontSize: '11px', color: '#e0e0e0',
+                overflowY: 'auto', lineHeight: '1.6',
+                fontFamily: 'monospace',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.6)'
+            });
+            listPanel.innerHTML = '<b style="color:#a0c4ff">📋 视觉描述</b> <span style="color:#666">加载中...</span>';
+            document.body.appendChild(listPanel);
+            refreshListPanel();
+            listTimer = setInterval(refreshListPanel, 2000);
+        }
+
+        function refreshListPanel() {
+            fetch('/api/web/video/context')
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    var list = data.vision_list || [];
+                    if (!listPanel) return;
+                    if (!list.length) {
+                        listPanel.innerHTML = '<b style="color:#a0c4ff">📋 视觉描述</b><br><span style="color:#666">无数据，请先开启手机摄像头</span>';
+                        return;
+                    }
+                    var recent = list.slice(-10).reverse();
+                    var html = '<b style="color:#a0c4ff">📋 视觉描述</b> <span style="color:#666">(' + list.length + '段)</span><br>';
+                    recent.forEach(function(f) {
+                        var t1 = new Date(f.start_time * 1000).toLocaleTimeString();
+                        var t2 = new Date(f.end_time * 1000).toLocaleTimeString();
+                        var timeStr = t1 === t2 ? t1 : t1 + ' > ' + t2;
+                        var faces = (f.faces || []).filter(function(fc){ return fc.person_name; }).map(function(fc){ return fc.person_name; }).join(', ');
+                        html += '<div style="border-bottom:1px solid #222;padding:4px 0">';
+                        html += '<span style="color:#555;font-size:10px">' + timeStr + '</span><br>';
+                        html += '<span style="color:#e0e0e0">' + (f.image_description || '') + '</span>';
+                        if (faces) html += ' <span style="color:#7ecfff">[' + faces + ']</span>';
+                        html += '</div>';
+                    });
+                    listPanel.innerHTML = html;
+                })
+                .catch(function() {
+                    if (listPanel) listPanel.innerHTML = '<b style="color:#a0c4ff">📋 视觉描述</b><br><span style="color:#f44336">请求失败</span>';
+                });
+        }
+
+        // ── 摄像头实时预览按钮 ──
+        function createCamBtn() {
+            var btn = document.createElement('button');
+            btn.textContent = '📷';
+            btn.title = '摄像头实时预览';
+            Object.assign(btn.style, {
+                position: 'fixed', bottom: '16px', right: '16px',
+                width: '40px', height: '40px', borderRadius: '50%',
+                background: '#1a1a2e', border: '1px solid #a0c4ff',
+                color: '#a0c4ff', fontSize: '18px', cursor: 'pointer',
+                zIndex: '10000', boxShadow: '0 2px 8px rgba(0,0,0,0.5)'
+            });
+            btn.addEventListener('click', toggleCamPanel);
+            document.body.appendChild(btn);
+        }
+
+        function toggleCamPanel() {
+            if (camVisible) {
+                if (camPanel) { camPanel.remove(); camPanel = null; camImg = null; }
+                if (camTimer) { clearInterval(camTimer); camTimer = null; }
+                camVisible = false;
+            } else {
+                showCamPanel();
+                camVisible = true;
+            }
+        }
+
+        function showCamPanel() {
+            camPanel = document.createElement('div');
+            Object.assign(camPanel.style, {
+                position: 'fixed', bottom: '64px', right: '16px',
+                width: '280px',
+                background: 'rgba(10,10,20,0.97)',
+                border: '1px solid #a0c4ff', borderRadius: '8px',
+                padding: '8px', zIndex: '9998',
+                boxShadow: '0 4px 16px rgba(0,0,0,0.7)',
+                cursor: 'move'
+            });
+
+            var header = document.createElement('div');
+            header.innerHTML = '<span style="color:#a0c4ff;font-size:11px;font-family:monospace">📷 摄像头预览</span> <span style="color:#666;font-size:10px">（手机推流）</span>';
+            header.style.marginBottom = '6px';
+            camPanel.appendChild(header);
+
+            camImg = document.createElement('img');
+            camImg.style.cssText = 'width:100%;border-radius:4px;display:block;background:#111;min-height:160px;object-fit:cover;';
+            camImg.alt = '等待摄像头画面...';
+            camPanel.appendChild(camImg);
+
+            var hint = document.createElement('div');
+            hint.style.cssText = 'color:#555;font-size:10px;font-family:monospace;margin-top:4px;text-align:center;';
+            hint.textContent = '每4秒刷新';
+            camPanel.appendChild(hint);
+
+            // 拖拽
+            var dragging = false, ox = 0, oy = 0;
+            header.addEventListener('mousedown', function(e) {
+                dragging = true; ox = e.clientX - camPanel.offsetLeft; oy = e.clientY - camPanel.offsetTop;
+            });
+            document.addEventListener('mousemove', function(e) {
+                if (!dragging) return;
+                camPanel.style.left = (e.clientX - ox) + 'px';
+                camPanel.style.top = (e.clientY - oy) + 'px';
+                camPanel.style.right = 'auto'; camPanel.style.bottom = 'auto';
+            });
+            document.addEventListener('mouseup', function() { dragging = false; });
+
+            document.body.appendChild(camPanel);
+            fetchCamFrame();
+            camTimer = setInterval(fetchCamFrame, 1000);
+        }
+
+        function fetchCamFrame() {
+            // 从 /api/web/video/context 取最新帧的 base64（如果后端支持），
+            // 否则直接请求 /web/camera-snapshot
+            fetch('/api/web/video/snapshot')
+                .then(function(r) {
+                    if (!r.ok) throw new Error('no snapshot');
+                    return r.blob();
+                })
+                .then(function(blob) {
+                    if (!camImg) return;
+                    var url = URL.createObjectURL(blob);
+                    camImg.src = url;
+                    camImg.style.minHeight = '0';
+                })
+                .catch(function() {
+                    if (camImg) camImg.alt = '暂无画面（手机摄像头连接后自动显示）';
+                });
+        }
+
+        document.addEventListener('DOMContentLoaded', function() {
+            createListBtn();
+            createCamBtn();
+        });
+    })();
+    </script>
 </body>
 </html>

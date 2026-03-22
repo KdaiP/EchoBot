@@ -43,6 +43,7 @@ class ConversationCoordinator:
         roleplay_engine: RoleplayEngine,
         role_registry: RoleCardRegistry,
         delegated_ack_enabled: bool = True,
+        vision_context_provider: Any | None = None,
     ) -> None:
         self._session_store = session_store
         self._agent_runner = agent_runner
@@ -50,6 +51,7 @@ class ConversationCoordinator:
         self._roleplay_engine = roleplay_engine
         self._role_registry = role_registry
         self._delegated_ack_enabled = delegated_ack_enabled
+        self._vision_context_provider = vision_context_provider
         self._jobs = ConversationJobStore()
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._session_locks_guard = asyncio.Lock()
@@ -65,6 +67,54 @@ class ConversationCoordinator:
     def set_delegated_ack_enabled(self, enabled: bool) -> None:
         self._delegated_ack_enabled = bool(enabled)
 
+    def set_vision_context_provider(self, provider: Any) -> None:
+        """注入视觉上下文提供器（由插件在 on_startup 时调用）"""
+        self._vision_context_provider = provider
+
+    def _build_vision_message(self) -> str | None:
+        """从视觉提供器构建临时系统消息"""
+        if self._vision_context_provider is None:
+            return None
+        try:
+            frames = self._vision_context_provider.get_vision_context_list()
+            if not frames:
+                return None
+            lines = [
+                "[实时视觉]",
+                "以下是你通过摄像头当前看到的画面，这是你真实的视觉输入。",
+                "规则：",
+                "1. 用户问你'看到什么''周围什么情况'等 → 直接用下面的描述回答",
+                "2. 画面中出现的人名已通过人脸识别标注，可直接使用",
+                "3. 自然融入视觉信息，不要说'根据摄像头''根据视觉数据'等机械表述",
+                "",
+                "当前画面（最新在后）：",
+            ]
+            has_unknown_face = False
+            for f in frames[-8:]:
+                desc = f.get("image_description", "")
+                faces = f.get("faces", [])
+                named = [fc["person_name"] for fc in faces if fc.get("person_name")]
+                unnamed_count = sum(1 for fc in faces if not fc.get("person_name"))
+                if unnamed_count > 0:
+                    has_unknown_face = True
+                face_str = f"【{', '.join(named)}】" if named else ""
+                if unnamed_count > 0:
+                    face_str += f"【{unnamed_count}个未知人脸】"
+                import time
+                t1 = time.strftime("%H:%M:%S", time.localtime(f.get("start_time", 0)))
+                t2 = time.strftime("%H:%M:%S", time.localtime(f.get("end_time", 0)))
+                time_str = t1 if t1 == t2 else f"{t1}~{t2}"
+                lines.append(f"  [{time_str}] {desc}{face_str}")
+            if has_unknown_face:
+                lines.append("")
+                lines.append("[主动行为指令]",)
+                lines.append("画面中有你不认识的人。在回复用户时，自然地询问对方的名字，例如：'对了，我好像还不认识你，能告诉我你叫什么吗？'")
+                lines.append("当用户告知名字后，立即调用 bind_face_to_name 工具将其绑定，不需要用户再次要求。")
+            lines.append("[视觉结束]")
+            return "\n".join(lines)
+        except Exception:
+            return None
+
     async def handle_user_turn(
         self,
         session_name: str,
@@ -74,6 +124,7 @@ class ConversationCoordinator:
         role_name: str | None = None,
         route_mode: RouteMode | None = None,
         completion_callback: CompletionCallback | None = None,
+        transient_system_messages: list[str] | None = None,
     ) -> OrchestratedTurnResult:
         return await self.handle_user_turn_stream(
             session_name,
@@ -82,6 +133,7 @@ class ConversationCoordinator:
             role_name=role_name,
             route_mode=route_mode,
             completion_callback=completion_callback,
+            transient_system_messages=transient_system_messages,
         )
 
     async def handle_user_turn_stream(
@@ -94,7 +146,12 @@ class ConversationCoordinator:
         route_mode: RouteMode | None = None,
         completion_callback: CompletionCallback | None = None,
         on_chunk: StreamCallback | None = None,
+        transient_system_messages: list[str] | None = None,
     ) -> OrchestratedTurnResult:
+        # 自动注入视觉上下文
+        vision_msg = self._build_vision_message()
+        if vision_msg:
+            transient_system_messages = [vision_msg, *(transient_system_messages or [])]
         await self.restore_session(session_name)
         chunk_handler = on_chunk or _discard_stream_chunk
         lock = await self._session_lock(session_name)
@@ -119,6 +176,7 @@ class ConversationCoordinator:
                     image_urls=image_urls,
                     role_card=role_card,
                     on_chunk=chunk_handler,
+                    transient_system_messages=transient_system_messages,
                 )
                 session.history.extend(
                     [
@@ -185,6 +243,7 @@ class ConversationCoordinator:
                     handoff_text=handoff_text,
                     trace_run_id=trace_run_id,
                     completion_callback=completion_callback,
+                    extra_transient_messages=transient_system_messages,
                 ),
             )
             if immediate_response.strip():
@@ -381,16 +440,18 @@ class ConversationCoordinator:
         handoff_text: str | None,
         trace_run_id: str | None,
         completion_callback: CompletionCallback | None,
+        extra_transient_messages: list[str] | None = None,
     ) -> None:
         visible_role_name = ""
         try:
+            transient: list[str] = []
+            if extra_transient_messages:
+                transient.extend(extra_transient_messages)
+            if handoff_text and handoff_text.strip():
+                transient.append(handoff_text)
             run_prompt_kwargs: dict[str, Any] = {
                 "scheduled_context": False,
-                "transient_system_messages": (
-                    [handoff_text]
-                    if handoff_text and handoff_text.strip()
-                    else None
-                ),
+                "transient_system_messages": transient if transient else None,
             }
             if image_urls and _supports_keyword_argument(
                 self._agent_runner.run_prompt,

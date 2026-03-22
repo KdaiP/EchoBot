@@ -26,7 +26,7 @@ htmlcov/
 .hypothesis/
 
 # Local environment files
-.env
+# .env  # Committed with placeholder values - copy and fill in your own keys
 .env.*
 !.env.example
 
@@ -43,3 +43,12 @@ example_projects/
 
 .echobot
 logs/
+
+# Node
+node_modules/
+package-lock.json
+
+# Generated docs
+VIDEO_CALL_FINAL_GUIDE.md
+VIDEO_CALL_INTEGRATION_GUIDE.md
+VIDEO_CALL_PLUGIN_SUMMARY.md
