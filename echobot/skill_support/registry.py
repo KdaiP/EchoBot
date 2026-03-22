@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -230,6 +231,11 @@ def _build_default_search_roots(
         project_root / ".agents" / "skills",
         project_root / "echobot" / "skills",
     ]
+
+    # PyInstaller: data files are extracted under sys._MEIPASS
+    _meipass = getattr(sys, "_MEIPASS", None)
+    if _meipass:
+        roots.append(Path(_meipass) / "echobot" / "skills")
 
     if include_user_roots:
         home = Path.home()

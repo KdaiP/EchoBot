@@ -76,15 +76,26 @@ EchoBot 采用 **Decision - Roleplay - Agent** 三层架构来解决这一痛点
 
 💡 *Tip: 想要最快跑通项目？直接将本仓库交给 Codex、Claude Code 或 Cursor 等 Coding Agent 帮你一键配置喵(≧∇≦)/*
 
-### 安装依赖
+### 方式一：下载预构建版本（无需 Python 环境）
+
+前往 [Releases](https://github.com/MisterRabbit0w0/EchoBot/releases) 页面，下载对应平台的压缩包并解压。编辑目录中的 `.env`
+文件，填入你的 LLM 供应商信息后，直接运行：
+
+```shell
+# Windows
+echobot.exe app
+
+# Linux
+./echobot app
+```
+
+### 方式二：从源码运行
 
 推荐使用 Python 3.11 及以上版本
 
 ```shell
 pip install -r requirements.txt
 ```
-
-### 配置.env文件
 
 复制`.env.example`文件并重命名为`.env`，填入你的 LLM 供应商信息（兼容 OpenAI 格式）：
 
@@ -93,8 +104,6 @@ LLM_API_KEY=your_api_key_here
 LLM_MODEL=deepseek-chat
 LLM_BASE_URL=https://api.deepseek.com/v1
 ```
-
-### 启动服务
 
 运行以下命令将同时启动聊天平台 Gateway 和网页端：
 

@@ -25,3 +25,6 @@ sherpa-onnx
 # Gateway
 qq-botpy
 python-telegram-bot
+
+# Testing
+pytest
