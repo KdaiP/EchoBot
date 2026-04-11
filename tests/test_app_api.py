@@ -2316,6 +2316,8 @@ class AppApiTests(unittest.TestCase):
 
                 self.assertEqual(200, page.status_code)
                 self.assertIn('id="desktop-stage"', page.text)
+                self.assertIn('id="live2d-stage"', page.text)
+                self.assertIn('class="live2d-stage desktop-live2d-stage"', page.text)
                 self.assertIn('data-desktop-transparent-stage="true"', page.text)
                 self.assertIn('id="live2d-canvas"', page.text)
                 self.assertIn('id="desktop-drag-button"', page.text)

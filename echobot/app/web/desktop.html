@@ -14,109 +14,40 @@
         data-desktop-transparent-stage="true"
         aria-label="EchoBot Desktop Pet"
     >
-        <div class="desktop-resize-corner desktop-resize-corner-top-left" data-desktop-resize-edge="top-left" aria-hidden="true"></div>
-        <div class="desktop-resize-corner desktop-resize-corner-top-right" data-desktop-resize-edge="top-right" aria-hidden="true"></div>
-        <div class="desktop-resize-corner desktop-resize-corner-bottom-left" data-desktop-resize-edge="bottom-left" aria-hidden="true"></div>
-        <div class="desktop-resize-corner desktop-resize-corner-bottom-right" data-desktop-resize-edge="bottom-right" aria-hidden="true"></div>
-        <div id="stage-background-image" class="stage-background-image" hidden></div>
-        <canvas id="live2d-canvas"></canvas>
-        <div id="stage-light-back" class="stage-light stage-light-back"></div>
-        <div id="stage-light-rim" class="stage-light stage-light-rim"></div>
-        <div id="stage-gradient" class="stage-gradient"></div>
-        <div id="stage-vignette" class="stage-vignette"></div>
-        <div id="stage-grain" class="stage-grain"></div>
-        <div id="stage-message" class="stage-message">正在加载 Live2D 模型…</div>
-
-        <section
-            class="desktop-toolbar"
-            aria-label="Desktop controls"
-            data-desktop-interactive="true"
+        <div
+            id="live2d-stage"
+            class="live2d-stage desktop-live2d-stage"
+            data-desktop-transparent-stage="true"
         >
-            <button
-                id="desktop-web-button"
-                class="desktop-tool-button"
-                type="button"
+            <div class="desktop-resize-corner desktop-resize-corner-top-left" data-desktop-resize-edge="top-left" aria-hidden="true"></div>
+            <div class="desktop-resize-corner desktop-resize-corner-top-right" data-desktop-resize-edge="top-right" aria-hidden="true"></div>
+            <div class="desktop-resize-corner desktop-resize-corner-bottom-left" data-desktop-resize-edge="bottom-left" aria-hidden="true"></div>
+            <div class="desktop-resize-corner desktop-resize-corner-bottom-right" data-desktop-resize-edge="bottom-right" aria-hidden="true"></div>
+            <div id="stage-background-image" class="stage-background-image" hidden></div>
+            <canvas id="live2d-canvas"></canvas>
+            <div id="stage-light-back" class="stage-light stage-light-back"></div>
+            <div id="stage-light-rim" class="stage-light stage-light-rim"></div>
+            <div id="stage-gradient" class="stage-gradient"></div>
+            <div id="stage-vignette" class="stage-vignette"></div>
+            <div id="stage-grain" class="stage-grain"></div>
+            <div id="stage-message" class="stage-message">正在加载 Live2D 模型…</div>
+
+            <section
+                class="desktop-toolbar"
+                aria-label="Desktop controls"
                 data-desktop-interactive="true"
-                aria-label="打开控制面板"
-                title="打开控制面板"
             >
-                <svg class="desktop-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                        d="M6.25 18.75h10.5a4 4 0 0 0 .57-7.96A5.75 5.75 0 0 0 6.6 8.95 3.85 3.85 0 0 0 6.25 18.75Z"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="1.6"
-                    />
-                    <path
-                        d="M9.2 14.2c.88-1.2 2.24-1.8 4.1-1.8"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-width="1.6"
-                    />
-                </svg>
-            </button>
-            <button
-                id="desktop-voice-button"
-                class="desktop-tool-button"
-                type="button"
-                data-desktop-interactive="true"
-                aria-pressed="false"
-                aria-label="语音服务"
-                title="语音服务"
-            >
-                <svg class="desktop-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <rect
-                        x="9"
-                        y="3.75"
-                        width="6"
-                        height="10.5"
-                        rx="3"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="1.6"
-                    />
-                    <path
-                        d="M6.75 10.75a5.25 5.25 0 0 0 10.5 0"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-width="1.6"
-                    />
-                    <path
-                        d="M12 16v4.25"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-width="1.6"
-                    />
-                    <path
-                        d="M9 20.25h6"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-width="1.6"
-                    />
-                </svg>
-            </button>
-            <div
-                class="desktop-drag-control"
-                data-desktop-interactive="true"
-                aria-label="拖动桌宠"
-                title="拖动桌宠"
-            >
-                <div
-                    id="desktop-drag-button"
-                    class="desktop-drag-target"
+                <button
+                    id="desktop-web-button"
+                    class="desktop-tool-button"
+                    type="button"
                     data-desktop-interactive="true"
-                    aria-hidden="true"
-                ></div>
-                <div class="desktop-tool-button desktop-drag-visual" aria-hidden="true">
+                    aria-label="打开控制面板"
+                    title="打开控制面板"
+                >
                     <svg class="desktop-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
                         <path
-                            d="M7.2 11.6V6a1.45 1.45 0 1 1 2.9 0v4.8"
+                            d="M6.25 18.75h10.5a4 4 0 0 0 .57-7.96A5.75 5.75 0 0 0 6.6 8.95 3.85 3.85 0 0 0 6.25 18.75Z"
                             fill="none"
                             stroke="currentColor"
                             stroke-linecap="round"
@@ -124,33 +55,108 @@
                             stroke-width="1.6"
                         />
                         <path
-                            d="M10.1 10.6V4.9a1.45 1.45 0 1 1 2.9 0v5.7"
+                            d="M9.2 14.2c.88-1.2 2.24-1.8 4.1-1.8"
                             fill="none"
                             stroke="currentColor"
                             stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="1.6"
-                        />
-                        <path
-                            d="M13 10.3V4.9a1.45 1.45 0 1 1 2.9 0v5.9"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            stroke-width="1.6"
-                        />
-                        <path
-                            d="M15.9 10.9V6.5a1.45 1.45 0 1 1 2.9 0v7.2c0 3.2-2.6 5.8-5.8 5.8h-1.95a5.5 5.5 0 0 1-4.5-2.35L4.25 13.7a1.45 1.45 0 0 1 2.24-1.84l1.9 2.16V8.7a1.45 1.45 0 1 1 2.9 0"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
                             stroke-width="1.6"
                         />
                     </svg>
+                </button>
+                <button
+                    id="desktop-voice-button"
+                    class="desktop-tool-button"
+                    type="button"
+                    data-desktop-interactive="true"
+                    aria-pressed="false"
+                    aria-label="语音服务"
+                    title="语音服务"
+                >
+                    <svg class="desktop-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <rect
+                            x="9"
+                            y="3.75"
+                            width="6"
+                            height="10.5"
+                            rx="3"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.6"
+                        />
+                        <path
+                            d="M6.75 10.75a5.25 5.25 0 0 0 10.5 0"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-width="1.6"
+                        />
+                        <path
+                            d="M12 16v4.25"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-width="1.6"
+                        />
+                        <path
+                            d="M9 20.25h6"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-width="1.6"
+                        />
+                    </svg>
+                </button>
+                <div
+                    class="desktop-drag-control"
+                    data-desktop-interactive="true"
+                    aria-label="拖动桌宠"
+                    title="拖动桌宠"
+                >
+                    <div
+                        id="desktop-drag-button"
+                        class="desktop-drag-target"
+                        data-desktop-interactive="true"
+                        aria-hidden="true"
+                    ></div>
+                    <div class="desktop-tool-button desktop-drag-visual" aria-hidden="true">
+                        <svg class="desktop-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path
+                                d="M7.2 11.6V6a1.45 1.45 0 1 1 2.9 0v4.8"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="1.6"
+                            />
+                            <path
+                                d="M10.1 10.6V4.9a1.45 1.45 0 1 1 2.9 0v5.7"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="1.6"
+                            />
+                            <path
+                                d="M13 10.3V4.9a1.45 1.45 0 1 1 2.9 0v5.9"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="1.6"
+                            />
+                            <path
+                                d="M15.9 10.9V6.5a1.45 1.45 0 1 1 2.9 0v7.2c0 3.2-2.6 5.8-5.8 5.8h-1.95a5.5 5.5 0 0 1-4.5-2.35L4.25 13.7a1.45 1.45 0 0 1 2.24-1.84l1.9 2.16V8.7a1.45 1.45 0 1 1 2.9 0"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="1.6"
+                            />
+                        </svg>
+                    </div>
                 </div>
-            </div>
-        </section>
+            </section>
+        </div>
     </main>
 
     <form id="chat-form" class="desktop-hidden-shell" autocomplete="off">

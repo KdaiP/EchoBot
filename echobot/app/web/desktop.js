@@ -247,10 +247,7 @@ async function syncDesktopCursorFocus() {
         DOM.stageElement,
         stageRect,
     );
-    DOM.stageElement.classList.toggle(
-        "is-desktop-hovered",
-        isCursorInsideDesktopWindow(cursorState),
-    );
+    setDesktopHoverState(isCursorInsideDesktopWindow(cursorState));
     void setDesktopMousePassthrough(!captureIntent.capture);
     if (!stagePoint) {
         return;
@@ -258,6 +255,12 @@ async function syncDesktopCursorFocus() {
 
     live2d.setDesktopCursorOverlapFromStagePoint(stagePoint.x, stagePoint.y);
     live2d.applyExternalFocusPoint(stagePoint.x, stagePoint.y);
+}
+
+function setDesktopHoverState(isHovered) {
+    const hovered = Boolean(isHovered);
+    DOM.stageElement?.classList.toggle("is-desktop-hovered", hovered);
+    document.getElementById("desktop-stage")?.classList.toggle("is-desktop-hovered", hovered);
 }
 
 function applyDesktopStageDefaults() {
