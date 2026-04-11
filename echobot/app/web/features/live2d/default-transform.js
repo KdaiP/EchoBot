@@ -10,9 +10,11 @@ export function resolveDefaultLive2DTransform(options) {
 
     if (desktopTransparentStage) {
         const nextScale = Math.max(widthRatio * 0.96, heightRatio * 1.18);
+        const scaledHeight = baseHeight * nextScale;
+        const topMargin = resolveDesktopTopMargin(stageHeight);
         return {
             x: stageWidth * 0.5,
-            y: stageHeight * 0.48,
+            y: topMargin + scaledHeight * 0.5,
             scale: roundToTransform(nextScale),
         };
     }
@@ -26,4 +28,9 @@ export function resolveDefaultLive2DTransform(options) {
 
 function roundToTransform(value) {
     return Math.round(value * 10000) / 10000;
+}
+
+function resolveDesktopTopMargin(stageHeight) {
+    const height = Math.max(Number(stageHeight) || 0, 1);
+    return Math.max(height * 0.06, 12);
 }
