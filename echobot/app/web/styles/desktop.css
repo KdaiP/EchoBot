@@ -41,6 +41,7 @@ body {
     border: none;
     border-radius: 28px;
     --stage-background: transparent;
+    pointer-events: none;
 }
 
 .desktop-stage::before {
@@ -103,6 +104,7 @@ body[data-desktop-transparent-stage="true"] .stage-message {
     align-items: stretch;
     gap: 8px;
     z-index: 9;
+    pointer-events: auto;
 }
 
 .desktop-tool-button {
@@ -126,6 +128,11 @@ body[data-desktop-transparent-stage="true"] .stage-message {
     display: inline-flex;
     align-items: center;
     justify-content: center;
+}
+
+.stage-message,
+#live2d-canvas {
+    pointer-events: none;
 }
 
 #desktop-drag-button {

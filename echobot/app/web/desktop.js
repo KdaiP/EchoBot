@@ -4,6 +4,10 @@ import { appState, asrState, audioState, sessionState } from "./core/store.js";
 import { createAsrModule } from "./features/asr.js";
 import { createLive2DModule } from "./features/live2d/index.js";
 import {
+    hasUsableDesktopPassthroughBridge,
+    isDesktopInteractiveRegion,
+} from "./features/live2d/desktop-passthrough.js";
+import {
     hasUsableDesktopCursorBridge,
     mapScreenPointToStagePoint,
 } from "./features/live2d/desktop-cursor.js";
@@ -34,6 +38,7 @@ const DESKTOP_ROUTE_URL = "http://127.0.0.1:8000/desktop";
 const DESKTOP_CURSOR_POLL_INTERVAL_MS = 33;
 
 let desktopCursorPollTimerId = 0;
+let desktopMousePassthroughEnabled = null;
 
 const status = createUiStatusController();
 const live2d = createLive2DModule({
@@ -77,6 +82,7 @@ async function initializeDesktopPage() {
     initializeMessageInteractions();
     wireDesktopEvents();
     applyDesktopStageDefaults();
+    await setDesktopMousePassthrough(true);
     status.setConnectionState("idle", "初始化中");
     status.setRunStatus("正在连接 EchoBot…");
     setVoiceDetail("语音待命");
@@ -115,6 +121,8 @@ function wireDesktopEvents() {
     DOM.desktopVoiceButton?.addEventListener("click", handleDesktopVoiceButtonClick);
     DOM.desktopWebButton?.addEventListener("click", handleDesktopWebButtonClick);
     DOM.desktopDragButton?.addEventListener("pointerdown", handleDesktopDragStart);
+    document.addEventListener("pointerover", handleDesktopPointerOver, true);
+    document.addEventListener("pointerout", handleDesktopPointerOut, true);
     DOM.recordButton?.addEventListener("click", () => {
         void asr.handleRecordButtonClick();
         renderVoiceButton();
@@ -135,7 +143,52 @@ function wireDesktopEvents() {
         stopDesktopCursorPolling();
         asr.handleBeforeUnload();
         tts.stopSpeechPlayback();
+        document.removeEventListener("pointerover", handleDesktopPointerOver, true);
+        document.removeEventListener("pointerout", handleDesktopPointerOut, true);
     });
+}
+
+function handleDesktopPointerOver(event) {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!isDesktopInteractiveRegion(target)) {
+        return;
+    }
+
+    void setDesktopMousePassthrough(false);
+}
+
+function handleDesktopPointerOut(event) {
+    const target = event.target instanceof Element ? event.target : null;
+    if (!isDesktopInteractiveRegion(target)) {
+        return;
+    }
+
+    const nextTarget = event.relatedTarget instanceof Element ? event.relatedTarget : null;
+    if (isDesktopInteractiveRegion(nextTarget)) {
+        return;
+    }
+
+    void setDesktopMousePassthrough(true);
+}
+
+async function setDesktopMousePassthrough(enabled) {
+    const passthrough = Boolean(enabled);
+    if (desktopMousePassthroughEnabled === passthrough) {
+        return passthrough;
+    }
+    if (!hasUsableDesktopPassthroughBridge(window.echobotDesktop)) {
+        desktopMousePassthroughEnabled = passthrough;
+        return passthrough;
+    }
+
+    try {
+        const applied = await window.echobotDesktop.setMousePassthrough(passthrough);
+        desktopMousePassthroughEnabled = Boolean(applied);
+    } catch (error) {
+        console.error(error);
+    }
+
+    return desktopMousePassthroughEnabled;
 }
 
 function startDesktopCursorPolling() {

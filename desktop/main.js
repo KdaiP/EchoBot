@@ -27,7 +27,7 @@ function createWindow() {
     y: Math.round(display.workArea.y + display.workArea.height - height - 24),
     frame: false,
     transparent: true,
-    resizable: false,
+    resizable: true,
     movable: true,
     alwaysOnTop: true,
     skipTaskbar: false,
@@ -39,6 +39,9 @@ function createWindow() {
     },
   });
 
+  mainWindow.setIgnoreMouseEvents(true, {
+    forward: true,
+  });
   mainWindow.loadURL(DESKTOP_URL);
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -172,6 +175,18 @@ ipcMain.handle("desktop:start-window-drag", async () => {
     return;
   }
   mainWindow.focus();
+});
+
+ipcMain.handle("desktop:set-mouse-passthrough", async (_event, enabled) => {
+  if (!mainWindow) {
+    return false;
+  }
+
+  const passthrough = Boolean(enabled);
+  mainWindow.setIgnoreMouseEvents(passthrough, {
+    forward: passthrough,
+  });
+  return passthrough;
 });
 
 ipcMain.handle("desktop:get-global-cursor-state", async () => {
