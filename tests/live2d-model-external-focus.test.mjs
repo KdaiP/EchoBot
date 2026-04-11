@@ -106,3 +106,48 @@ test("applyExternalFocusPoint stores pointer coordinates and updates focus", asy
         live2dState.live2dMouseFollowEnabled = originalMouseFollowEnabled;
     }
 });
+
+test("setDesktopCursorOverlap toggles live2d model visibility from stage point hits", async () => {
+    const { live2dState } = await import("../echobot/app/web/core/store.js");
+    const { createLive2DModelController } = await import(
+        "../echobot/app/web/features/live2d/model.js"
+    );
+
+    const originalModel = live2dState.live2dModel;
+
+    live2dState.live2dModel = {
+        visible: true,
+        getBounds() {
+            return {
+                x: 20,
+                y: 40,
+                width: 80,
+                height: 160,
+            };
+        },
+    };
+
+    try {
+        const controller = createLive2DModelController({
+            clamp(value, min, max) {
+                return Math.min(Math.max(value, min), max);
+            },
+            roundTo(value) {
+                return value;
+            },
+            readJson() {
+                return null;
+            },
+            removeStoredValue() {},
+            setStageMessage() {},
+            writeJson() {},
+        });
+
+        assert.equal(controller.setDesktopCursorOverlapFromStagePoint(50, 60), true);
+        assert.equal(live2dState.live2dModel.visible, false);
+        assert.equal(controller.setDesktopCursorOverlapFromStagePoint(5, 5), false);
+        assert.equal(live2dState.live2dModel.visible, true);
+    } finally {
+        live2dState.live2dModel = originalModel;
+    }
+});

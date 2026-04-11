@@ -5,6 +5,7 @@ import {
     findDesktopMouseCaptureIntent,
     hasUsableDesktopPassthroughBridge,
     getDesktopResizeEdge,
+    isCursorInsideDesktopWindow,
     isDesktopInteractiveRegion,
     isDesktopMouseCaptureRegion,
 } from "../echobot/app/web/features/live2d/desktop-passthrough.js";
@@ -137,4 +138,33 @@ test("findDesktopMouseCaptureIntent detects interactive hotspot from global curs
         capture: true,
         resizeEdge: "",
     });
+});
+
+test("isCursorInsideDesktopWindow detects when cursor is inside window bounds", () => {
+    assert.equal(
+        isCursorInsideDesktopWindow({
+            cursorX: 120,
+            cursorY: 140,
+            windowBounds: {
+                x: 100,
+                y: 100,
+                width: 80,
+                height: 60,
+            },
+        }),
+        true,
+    );
+    assert.equal(
+        isCursorInsideDesktopWindow({
+            cursorX: 90,
+            cursorY: 140,
+            windowBounds: {
+                x: 100,
+                y: 100,
+                width: 80,
+                height: 60,
+            },
+        }),
+        false,
+    );
 });

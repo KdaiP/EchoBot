@@ -154,3 +154,120 @@ test("desktop transparent stage keeps pixi background sprite hidden when no cust
         live2dState.stageEffects = originalStageEffects;
     }
 });
+
+test("desktop transparent stage disables residual stage gradient when effects are off", async () => {
+    const { DOM } = await import("../echobot/app/web/core/dom.js");
+    const { live2dState } = await import("../echobot/app/web/core/store.js");
+    const { createStageEffectsController } = await import(
+        "../echobot/app/web/features/live2d/effects.js"
+    );
+
+    const originalStageElement = DOM.stageElement;
+    const originalStageGradient = DOM.stageGradient;
+    const originalStageLightBack = DOM.stageLightBack;
+    const originalStageLightRim = DOM.stageLightRim;
+    const originalStageVignette = DOM.stageVignette;
+    const originalStageGrain = DOM.stageGrain;
+    const originalParticleLayer = live2dState.live2dParticleLayer;
+    const originalPostFilter = live2dState.stagePostFilter;
+    const originalBlurFilter = live2dState.stageBackgroundBlurFilter;
+    const originalPixiApp = live2dState.pixiApp;
+    const originalEffects = live2dState.stageEffects;
+
+    DOM.stageElement = createStageElement("true");
+    DOM.stageGradient = {
+        style: {
+            opacity: "",
+        },
+    };
+    DOM.stageLightBack = {
+        style: {
+            opacity: "",
+        },
+    };
+    DOM.stageLightRim = {
+        style: {
+            opacity: "",
+        },
+    };
+    DOM.stageVignette = {
+        style: {
+            opacity: "",
+        },
+    };
+    DOM.stageGrain = {
+        style: {
+            opacity: "",
+        },
+    };
+    live2dState.live2dParticleLayer = {
+        visible: true,
+    };
+    live2dState.stagePostFilter = {
+        enabled: true,
+        uniforms: {
+            uGlowStrength: 1,
+            uGrainStrength: 1,
+            uVignetteStrength: 1,
+            uLightPos: [0, 0],
+        },
+    };
+    live2dState.stageBackgroundBlurFilter = {
+        blur: 8,
+    };
+    live2dState.pixiApp = null;
+
+    try {
+        const controller = createStageEffectsController({
+            clamp(value, min, max) {
+                return Math.min(Math.max(value, min), max);
+            },
+            roundTo(value) {
+                return value;
+            },
+            setRunStatus() {},
+            applyStageLightingVars() {},
+            updateStageAtmosphereFrame() {},
+        });
+
+        controller.applyStageEffectsToRuntime({
+            enabled: false,
+            backgroundBlurEnabled: false,
+            backgroundBlur: 0,
+            lightEnabled: false,
+            lightFloatEnabled: false,
+            particlesEnabled: false,
+            particleDensity: 0,
+            particleOpacity: 0,
+            particleSize: 100,
+            particleSpeed: 0,
+            lightX: 0,
+            lightY: 0,
+            glowStrength: 0,
+            vignetteStrength: 0,
+            grainStrength: 0,
+            hue: 0,
+            saturation: 100,
+            contrast: 100,
+        });
+
+        assert.equal(DOM.stageGradient.style.opacity, "0");
+        assert.equal(DOM.stageLightBack.style.opacity, "0");
+        assert.equal(DOM.stageLightRim.style.opacity, "0");
+        assert.equal(DOM.stageVignette.style.opacity, "0");
+        assert.equal(DOM.stageGrain.style.opacity, "0");
+        assert.equal(live2dState.stagePostFilter.enabled, false);
+    } finally {
+        DOM.stageElement = originalStageElement;
+        DOM.stageGradient = originalStageGradient;
+        DOM.stageLightBack = originalStageLightBack;
+        DOM.stageLightRim = originalStageLightRim;
+        DOM.stageVignette = originalStageVignette;
+        DOM.stageGrain = originalStageGrain;
+        live2dState.live2dParticleLayer = originalParticleLayer;
+        live2dState.stagePostFilter = originalPostFilter;
+        live2dState.stageBackgroundBlurFilter = originalBlurFilter;
+        live2dState.pixiApp = originalPixiApp;
+        live2dState.stageEffects = originalEffects;
+    }
+});

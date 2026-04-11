@@ -185,6 +185,12 @@ body[data-desktop-transparent-stage="true"] .stage-message {
     position: relative;
     z-index: 2;
     pointer-events: none;
+    transition:
+        transform 120ms ease,
+        background 120ms ease,
+        border-color 120ms ease,
+        color 120ms ease,
+        box-shadow 120ms ease;
 }
 
 .stage-message,
@@ -217,6 +223,11 @@ body[data-desktop-transparent-stage="true"] .stage-message {
     transform: translateY(-1px);
     border-color: rgba(169, 101, 55, 0.22);
     color: rgba(89, 63, 46, 0.56);
+    box-shadow: 0 16px 32px rgba(61, 33, 18, 0.1);
+}
+
+.desktop-drag-control:active .desktop-drag-visual {
+    transform: translateY(0);
 }
 
 .desktop-tool-icon {

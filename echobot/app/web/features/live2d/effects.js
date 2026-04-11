@@ -5,6 +5,7 @@ import {
     DEFAULT_STAGE_EFFECT_SETTINGS,
     STAGE_EFFECTS_STORAGE_KEY,
 } from "./constants.js";
+import { isDesktopTransparentStageEnabled } from "./desktop-stage-mode.js";
 
 export function createStageEffectsController(deps) {
     const {
@@ -379,6 +380,7 @@ export function createStageEffectsController(deps) {
         const particlesEnabled = effectsEnabled && settings.particlesEnabled;
         const baseLightX = settings.lightX / 100;
         const baseLightY = settings.lightY / 100;
+        const transparentDesktopStage = isDesktopTransparentStageEnabled(DOM.stageElement);
 
         if (live2dState.stageBackgroundBlurFilter) {
             live2dState.stageBackgroundBlurFilter.blur = (
@@ -423,7 +425,9 @@ export function createStageEffectsController(deps) {
                 : "0";
         }
         if (DOM.stageGradient) {
-            DOM.stageGradient.style.opacity = effectsEnabled ? "1" : "0.35";
+            DOM.stageGradient.style.opacity = effectsEnabled
+                ? "1"
+                : (transparentDesktopStage ? "0" : "0.35");
         }
         if (live2dState.live2dParticleLayer) {
             live2dState.live2dParticleLayer.visible = particlesEnabled;
