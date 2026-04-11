@@ -1,4 +1,6 @@
 import { DEFAULT_LIP_SYNC_IDS, appState, live2dState } from "../../core/store.js";
+import { isDesktopTransparentStageEnabled } from "./desktop-stage-mode.js";
+import { resolveDefaultLive2DTransform } from "./default-transform.js";
 
 export function createLive2DModelController(deps) {
     const {
@@ -586,12 +588,18 @@ export function createLive2DModelController(deps) {
         const stageWidth = live2dState.pixiApp.screen.width;
         const stageHeight = live2dState.pixiApp.screen.height;
         const baseSize = measureLive2DBaseSize(model);
-        const widthRatio = stageWidth / Math.max(baseSize.width, 1);
-        const heightRatio = stageHeight / Math.max(baseSize.height, 1);
-        const nextScale = Math.min(widthRatio, heightRatio) * 0.82;
+        const defaultTransform = resolveDefaultLive2DTransform({
+            stageWidth: stageWidth,
+            stageHeight: stageHeight,
+            baseWidth: baseSize.width,
+            baseHeight: baseSize.height,
+            desktopTransparentStage: isDesktopTransparentStageEnabled(
+                document.getElementById("desktop-stage"),
+            ),
+        });
 
-        model.scale.set(nextScale);
-        model.position.set(stageWidth * 0.5, stageHeight * 0.62);
+        model.scale.set(defaultTransform.scale);
+        model.position.set(defaultTransform.x, defaultTransform.y);
     }
 
     function measureLive2DBaseSize(model) {

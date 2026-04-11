@@ -44,6 +44,39 @@ body {
     pointer-events: none;
 }
 
+.desktop-resize-corner {
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    pointer-events: auto;
+    z-index: 12;
+    background: transparent;
+}
+
+.desktop-resize-corner-top-left {
+    top: 0;
+    left: 0;
+    cursor: nwse-resize;
+}
+
+.desktop-resize-corner-top-right {
+    top: 0;
+    right: 0;
+    cursor: nesw-resize;
+}
+
+.desktop-resize-corner-bottom-left {
+    bottom: 0;
+    left: 0;
+    cursor: nesw-resize;
+}
+
+.desktop-resize-corner-bottom-right {
+    right: 0;
+    bottom: 0;
+    cursor: nwse-resize;
+}
+
 .desktop-stage::before {
     content: "";
     position: absolute;
@@ -130,14 +163,33 @@ body[data-desktop-transparent-stage="true"] .stage-message {
     justify-content: center;
 }
 
-.stage-message,
-#live2d-canvas {
+.desktop-drag-control {
+    position: relative;
+    width: 46px;
+    height: 46px;
+    pointer-events: auto;
+}
+
+.desktop-drag-target {
+    position: absolute;
+    inset: -8px;
+    border-radius: 999px;
+    background: transparent;
+    pointer-events: auto;
+    -webkit-app-region: drag;
+    z-index: 1;
+    cursor: move;
+}
+
+.desktop-drag-visual {
+    position: relative;
+    z-index: 2;
     pointer-events: none;
 }
 
-#desktop-drag-button {
-    -webkit-app-region: drag;
-    cursor: move;
+.stage-message,
+#live2d-canvas {
+    pointer-events: none;
 }
 
 .desktop-tool-button:hover {
@@ -159,6 +211,12 @@ body[data-desktop-transparent-stage="true"] .stage-message {
 
 .desktop-tool-button.is-active .desktop-tool-icon {
     filter: drop-shadow(0 0 6px rgba(216, 130, 83, 0.16));
+}
+
+.desktop-drag-control:hover .desktop-drag-visual {
+    transform: translateY(-1px);
+    border-color: rgba(169, 101, 55, 0.22);
+    color: rgba(89, 63, 46, 0.56);
 }
 
 .desktop-tool-icon {

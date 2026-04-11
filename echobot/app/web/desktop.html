@@ -14,6 +14,10 @@
         data-desktop-transparent-stage="true"
         aria-label="EchoBot Desktop Pet"
     >
+        <div class="desktop-resize-corner desktop-resize-corner-top-left" data-desktop-resize-edge="top-left" aria-hidden="true"></div>
+        <div class="desktop-resize-corner desktop-resize-corner-top-right" data-desktop-resize-edge="top-right" aria-hidden="true"></div>
+        <div class="desktop-resize-corner desktop-resize-corner-bottom-left" data-desktop-resize-edge="bottom-left" aria-hidden="true"></div>
+        <div class="desktop-resize-corner desktop-resize-corner-bottom-right" data-desktop-resize-edge="bottom-right" aria-hidden="true"></div>
         <div id="stage-background-image" class="stage-background-image" hidden></div>
         <canvas id="live2d-canvas"></canvas>
         <div id="stage-light-back" class="stage-light stage-light-back"></div>
@@ -97,49 +101,55 @@
                     />
                 </svg>
             </button>
-            <button
-                id="desktop-drag-button"
-                class="desktop-tool-button"
-                type="button"
+            <div
+                class="desktop-drag-control"
                 data-desktop-interactive="true"
                 aria-label="拖动桌宠"
                 title="拖动桌宠"
             >
-                <svg class="desktop-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
-                    <path
-                        d="M7.2 11.6V6a1.45 1.45 0 1 1 2.9 0v4.8"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="1.6"
-                    />
-                    <path
-                        d="M10.1 10.6V4.9a1.45 1.45 0 1 1 2.9 0v5.7"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="1.6"
-                    />
-                    <path
-                        d="M13 10.3V4.9a1.45 1.45 0 1 1 2.9 0v5.9"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="1.6"
-                    />
-                    <path
-                        d="M15.9 10.9V6.5a1.45 1.45 0 1 1 2.9 0v7.2c0 3.2-2.6 5.8-5.8 5.8h-1.95a5.5 5.5 0 0 1-4.5-2.35L4.25 13.7a1.45 1.45 0 0 1 2.24-1.84l1.9 2.16V8.7a1.45 1.45 0 1 1 2.9 0"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="1.6"
-                    />
-                </svg>
-            </button>
+                <div
+                    id="desktop-drag-button"
+                    class="desktop-drag-target"
+                    data-desktop-interactive="true"
+                    aria-hidden="true"
+                ></div>
+                <div class="desktop-tool-button desktop-drag-visual" aria-hidden="true">
+                    <svg class="desktop-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                            d="M7.2 11.6V6a1.45 1.45 0 1 1 2.9 0v4.8"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.6"
+                        />
+                        <path
+                            d="M10.1 10.6V4.9a1.45 1.45 0 1 1 2.9 0v5.7"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.6"
+                        />
+                        <path
+                            d="M13 10.3V4.9a1.45 1.45 0 1 1 2.9 0v5.9"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.6"
+                        />
+                        <path
+                            d="M15.9 10.9V6.5a1.45 1.45 0 1 1 2.9 0v7.2c0 3.2-2.6 5.8-5.8 5.8h-1.95a5.5 5.5 0 0 1-4.5-2.35L4.25 13.7a1.45 1.45 0 0 1 2.24-1.84l1.9 2.16V8.7a1.45 1.45 0 1 1 2.9 0"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.6"
+                        />
+                    </svg>
+                </div>
+            </div>
         </section>
     </main>
 

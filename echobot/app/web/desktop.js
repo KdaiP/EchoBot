@@ -4,8 +4,9 @@ import { appState, asrState, audioState, sessionState } from "./core/store.js";
 import { createAsrModule } from "./features/asr.js";
 import { createLive2DModule } from "./features/live2d/index.js";
 import {
+    getDesktopResizeEdge,
     hasUsableDesktopPassthroughBridge,
-    isDesktopInteractiveRegion,
+    isDesktopMouseCaptureRegion,
 } from "./features/live2d/desktop-passthrough.js";
 import {
     hasUsableDesktopCursorBridge,
@@ -39,6 +40,7 @@ const DESKTOP_CURSOR_POLL_INTERVAL_MS = 33;
 
 let desktopCursorPollTimerId = 0;
 let desktopMousePassthroughEnabled = null;
+let desktopResizeResetTimerId = 0;
 
 const status = createUiStatusController();
 const live2d = createLive2DModule({
@@ -120,7 +122,6 @@ function wireDesktopEvents() {
     DOM.chatForm?.addEventListener("submit", handleChatSubmit);
     DOM.desktopVoiceButton?.addEventListener("click", handleDesktopVoiceButtonClick);
     DOM.desktopWebButton?.addEventListener("click", handleDesktopWebButtonClick);
-    DOM.desktopDragButton?.addEventListener("pointerdown", handleDesktopDragStart);
     document.addEventListener("pointerover", handleDesktopPointerOver, true);
     document.addEventListener("pointerout", handleDesktopPointerOut, true);
     DOM.recordButton?.addEventListener("click", () => {
@@ -138,11 +139,17 @@ function wireDesktopEvents() {
     DOM.resetViewButton?.addEventListener("click", () => {
         live2d.resetLive2DViewToDefault();
     });
+    window.addEventListener("resize", handleDesktopWindowResize);
 
     window.addEventListener("beforeunload", () => {
         stopDesktopCursorPolling();
         asr.handleBeforeUnload();
         tts.stopSpeechPlayback();
+        if (desktopResizeResetTimerId) {
+            window.clearTimeout(desktopResizeResetTimerId);
+            desktopResizeResetTimerId = 0;
+        }
+        window.removeEventListener("resize", handleDesktopWindowResize);
         document.removeEventListener("pointerover", handleDesktopPointerOver, true);
         document.removeEventListener("pointerout", handleDesktopPointerOut, true);
     });
@@ -150,7 +157,7 @@ function wireDesktopEvents() {
 
 function handleDesktopPointerOver(event) {
     const target = event.target instanceof Element ? event.target : null;
-    if (!isDesktopInteractiveRegion(target)) {
+    if (!isDesktopMouseCaptureRegion(target)) {
         return;
     }
 
@@ -159,12 +166,12 @@ function handleDesktopPointerOver(event) {
 
 function handleDesktopPointerOut(event) {
     const target = event.target instanceof Element ? event.target : null;
-    if (!isDesktopInteractiveRegion(target)) {
+    if (!isDesktopMouseCaptureRegion(target)) {
         return;
     }
 
     const nextTarget = event.relatedTarget instanceof Element ? event.relatedTarget : null;
-    if (isDesktopInteractiveRegion(nextTarget)) {
+    if (isDesktopMouseCaptureRegion(nextTarget)) {
         return;
     }
 
@@ -425,18 +432,23 @@ async function handleDesktopWebButtonClick() {
     window.open(DESKTOP_WEB_URL, "_blank", "noopener,noreferrer");
 }
 
-function handleDesktopDragStart() {
-    if (window.echobotDesktop && typeof window.echobotDesktop.startWindowDrag === "function") {
-        window.echobotDesktop.startWindowDrag();
-    }
-}
-
 function shortenText(text) {
     const clean = String(text || "").replace(/\s+/g, " ").trim();
     if (clean.length <= 28) {
         return clean;
     }
     return `${clean.slice(0, 27)}…`;
+}
+
+function handleDesktopWindowResize() {
+    if (desktopResizeResetTimerId) {
+        window.clearTimeout(desktopResizeResetTimerId);
+    }
+
+    desktopResizeResetTimerId = window.setTimeout(() => {
+        desktopResizeResetTimerId = 0;
+        live2d.resetLive2DViewToDefault();
+    }, 120);
 }
 
 if (!DOM.stageElement) {
