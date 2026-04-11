@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+    findDesktopMouseCaptureIntent,
     hasUsableDesktopPassthroughBridge,
     getDesktopResizeEdge,
     isDesktopInteractiveRegion,
@@ -93,4 +94,47 @@ test("isDesktopMouseCaptureRegion accepts drag hotspot markers", () => {
     };
 
     assert.equal(isDesktopMouseCaptureRegion(hotspot), true);
+});
+
+test("findDesktopMouseCaptureIntent detects interactive hotspot from global cursor point", () => {
+    const captureRegion = {
+        getBoundingClientRect() {
+            return {
+                left: 260,
+                top: 220,
+                right: 314,
+                bottom: 274,
+            };
+        },
+        closest(selector) {
+            return selector === "[data-desktop-interactive='true']" ? this : null;
+        },
+    };
+
+    const intent = findDesktopMouseCaptureIntent(
+        {
+            cursorX: 380,
+            cursorY: 350,
+            windowBounds: {
+                x: 100,
+                y: 100,
+            },
+        },
+        {
+            querySelectorAll(selector) {
+                return selector === "[data-desktop-interactive='true'], [data-desktop-resize-edge]"
+                    ? [captureRegion]
+                    : [];
+            },
+        },
+        {
+            left: 0,
+            top: 0,
+        },
+    );
+
+    assert.deepEqual(intent, {
+        capture: true,
+        resizeEdge: "",
+    });
 });

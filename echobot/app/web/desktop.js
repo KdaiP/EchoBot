@@ -4,6 +4,7 @@ import { appState, asrState, audioState, sessionState } from "./core/store.js";
 import { createAsrModule } from "./features/asr.js";
 import { createLive2DModule } from "./features/live2d/index.js";
 import {
+    findDesktopMouseCaptureIntent,
     getDesktopResizeEdge,
     hasUsableDesktopPassthroughBridge,
     isDesktopMouseCaptureRegion,
@@ -122,6 +123,7 @@ function wireDesktopEvents() {
     DOM.chatForm?.addEventListener("submit", handleChatSubmit);
     DOM.desktopVoiceButton?.addEventListener("click", handleDesktopVoiceButtonClick);
     DOM.desktopWebButton?.addEventListener("click", handleDesktopWebButtonClick);
+    DOM.desktopDragButton?.addEventListener("pointerdown", handleDesktopDragStart);
     document.addEventListener("pointerover", handleDesktopPointerOver, true);
     document.addEventListener("pointerout", handleDesktopPointerOut, true);
     DOM.recordButton?.addEventListener("click", () => {
@@ -239,6 +241,12 @@ async function syncDesktopCursorFocus() {
         cursorState.windowBounds,
         stageRect,
     );
+    const captureIntent = findDesktopMouseCaptureIntent(
+        cursorState,
+        DOM.stageElement,
+        stageRect,
+    );
+    void setDesktopMousePassthrough(!captureIntent.capture);
     if (!stagePoint) {
         return;
     }
@@ -430,6 +438,12 @@ async function handleDesktopWebButtonClick() {
     }
 
     window.open(DESKTOP_WEB_URL, "_blank", "noopener,noreferrer");
+}
+
+function handleDesktopDragStart() {
+    if (window.echobotDesktop && typeof window.echobotDesktop.startWindowDrag === "function") {
+        void window.echobotDesktop.startWindowDrag();
+    }
 }
 
 function shortenText(text) {
