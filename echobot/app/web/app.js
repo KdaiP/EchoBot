@@ -11,7 +11,7 @@ import {
 } from "./modules/api.js";
 import { wireAppEvents } from "./bootstrap/wire-events.js";
 import { createUiStatusController } from "./bootstrap/ui-status.js";
-import { appState } from "./core/store.js";
+import { appState, audioState } from "./core/store.js";
 import { createAsrModule } from "./features/asr.js";
 import { createChatModule } from "./features/chat/index.js";
 import { createLayoutModule } from "./features/layout/index.js";
@@ -41,6 +41,8 @@ import {
 const status = createUiStatusController();
 const live2dBroadcast = createLive2DBroadcastSender();
 const MOUTH_BROADCAST_INTERVAL_MS = 33;
+const DESKTOP_ACTIVE_POLL_INTERVAL_MS = 4000;
+let webDesktopActivePollTimerId = 0;
 let lastMouthBroadcastAt = 0;
 const layout = createLayoutModule({
     addMessage,
@@ -188,8 +190,39 @@ roles.bindSessionHooks({
 
 document.addEventListener("DOMContentLoaded", initializePage);
 window.addEventListener("beforeunload", () => {
+    if (webDesktopActivePollTimerId) {
+        window.clearInterval(webDesktopActivePollTimerId);
+        webDesktopActivePollTimerId = 0;
+    }
     live2dBroadcast.close();
 }, { once: true });
+
+function stopWebDesktopActivePolling() {
+    if (!webDesktopActivePollTimerId) {
+        return;
+    }
+
+    window.clearInterval(webDesktopActivePollTimerId);
+    webDesktopActivePollTimerId = 0;
+}
+
+function startWebDesktopActivePolling() {
+    stopWebDesktopActivePolling();
+
+    const poll = async () => {
+        try {
+            const payload = await requestJson("/api/web/desktop/active");
+            audioState.desktopActive = Boolean(payload?.active);
+        } catch (error) {
+            console.warn("Desktop active poll failed", error);
+        }
+    };
+
+    void poll();
+    webDesktopActivePollTimerId = window.setInterval(() => {
+        void poll();
+    }, DESKTOP_ACTIVE_POLL_INTERVAL_MS);
+}
 
 async function initializePage() {
     layout.ensureSidebarToggleButtons();
@@ -236,6 +269,7 @@ async function initializePage() {
         asr.applyAsrStatus(config.asr);
         asr.startAsrStatusPolling();
         traces.resetTracePanel();
+        startWebDesktopActivePolling();
 
         status.setConnectionState("ready", "已连接");
         status.setRunStatus("准备就绪");

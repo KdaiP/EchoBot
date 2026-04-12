@@ -2349,6 +2349,43 @@ class AppApiTests(unittest.TestCase):
                 self.assertEqual(200, config.status_code)
                 self.assertTrue(config.json()["live2d"]["available"])
 
+    def test_web_desktop_active_reflects_ping(self) -> None:
+        from echobot.app.routers import web as web_router_module
+
+        web_router_module._desktop_last_ping_monotonic = 0.0
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                workspace = Path(temp_dir)
+                write_test_live2d_model(workspace)
+
+                app = create_app(
+                    runtime_options=RuntimeOptions(
+                        workspace=workspace,
+                        no_tools=True,
+                        no_skills=True,
+                        no_memory=True,
+                        no_heartbeat=True,
+                    ),
+                    channel_config_path=workspace / ".echobot" / "channels.json",
+                    context_builder=build_test_context,
+                    tts_service_builder=build_test_tts_service,
+                    asr_service_builder=build_test_asr_service,
+                )
+
+                with TestClient(app) as client:
+                    inactive = client.get("/api/web/desktop/active")
+                    self.assertEqual(200, inactive.status_code)
+                    self.assertFalse(inactive.json()["active"])
+
+                    ping = client.post("/api/web/desktop/ping")
+                    self.assertEqual(204, ping.status_code)
+
+                    active = client.get("/api/web/desktop/active")
+                    self.assertEqual(200, active.status_code)
+                    self.assertTrue(active.json()["active"])
+        finally:
+            web_router_module._desktop_last_ping_monotonic = 0.0
+
     def test_web_console_routes_expose_static_ui_and_live2d_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

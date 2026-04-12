@@ -21,7 +21,7 @@ export function createTtsPlaybackController(deps) {
 
     async function speakText(text, options = {}) {
         const preparedText = prepareTextForTts(text);
-        if (!preparedText || !audioState.ttsEnabled) {
+        if (!preparedText || !audioState.ttsEnabled || audioState.desktopActive) {
             return;
         }
 
@@ -39,6 +39,10 @@ export function createTtsPlaybackController(deps) {
     }
 
     function createSpeechSession() {
+        if (audioState.desktopActive) {
+            return null;
+        }
+
         const speechSession = {
             turnId: ++audioState.speechTurnCounter,
             rawText: "",

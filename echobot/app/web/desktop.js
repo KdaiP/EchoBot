@@ -45,9 +45,11 @@ const DESKTOP_WEB_URL = "http://127.0.0.1:8000/web";
 const DESKTOP_ROUTE_URL = "http://127.0.0.1:8000/desktop";
 const DESKTOP_CURSOR_POLL_INTERVAL_MS = 33;
 const DESKTOP_LIVE2D_SYNC_POLL_INTERVAL_MS = 2000;
+const DESKTOP_PING_INTERVAL_MS = 3000;
 
 let desktopCursorPollTimerId = 0;
 let desktopLive2DSyncPollTimerId = 0;
+let desktopPingTimerId = 0;
 let desktopLive2DSyncInFlight = false;
 let desktopMousePassthroughEnabled = null;
 let desktopResizeResetTimerId = 0;
@@ -192,6 +194,7 @@ async function initializeDesktopPage() {
         await live2d.loadLive2DModel(live2dConfig);
         startDesktopCursorPolling();
         startDesktopLive2DSyncPolling();
+        startDesktopPing();
 
         await tts.loadTtsOptions(config.tts);
         asr.applyAsrStatus(config.asr);
@@ -237,6 +240,7 @@ function wireDesktopEvents() {
     window.addEventListener("beforeunload", () => {
         stopDesktopCursorPolling();
         stopDesktopLive2DSyncPolling();
+        stopDesktopPing();
         asr.handleBeforeUnload();
         tts.stopSpeechPlayback();
         live2dBroadcastReceiver.close();
@@ -330,6 +334,28 @@ function stopDesktopLive2DSyncPolling() {
 
     window.clearInterval(desktopLive2DSyncPollTimerId);
     desktopLive2DSyncPollTimerId = 0;
+}
+
+function stopDesktopPing() {
+    if (!desktopPingTimerId) {
+        return;
+    }
+
+    window.clearInterval(desktopPingTimerId);
+    desktopPingTimerId = 0;
+}
+
+function startDesktopPing() {
+    stopDesktopPing();
+
+    const ping = () => {
+        void fetch("/api/web/desktop/ping", { method: "POST" }).catch((error) => {
+            console.warn("Desktop presence ping failed", error);
+        });
+    };
+
+    ping();
+    desktopPingTimerId = window.setInterval(ping, DESKTOP_PING_INTERVAL_MS);
 }
 
 async function syncDesktopLive2DSelectionFromServer() {

@@ -69,6 +69,8 @@ export const audioState = {
     selectedTtsProvider: "",
     selectedVoice: "",
     ttsEnabled: true,
+    /** When true, web console defers TTS to an active /desktop client. */
+    desktopActive: false,
     audioContext: null,
     audioAnalyser: null,
     audioSourceNode: null,
