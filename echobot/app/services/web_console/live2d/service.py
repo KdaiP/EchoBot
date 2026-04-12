@@ -25,8 +25,15 @@ class Live2DService:
         self._metadata = Live2DMetadataService(self._annotations_repository)
         self._uploads = Live2DUploadManager(workspace_root)
 
-    async def build_config(self) -> dict[str, Any] | None:
-        return await asyncio.to_thread(self._build_config_sync)
+    async def build_config(
+        self,
+        *,
+        selected_selection_key: str | None = None,
+    ) -> dict[str, Any] | None:
+        return await asyncio.to_thread(
+            self._build_config_sync,
+            selected_selection_key,
+        )
 
     async def render_model_json(self, asset_path: str) -> str:
         return await asyncio.to_thread(self._render_model_json_sync, asset_path)
@@ -75,13 +82,28 @@ class Live2DService:
     def resolve_asset(self, asset_path: str) -> Path:
         return self._catalog.resolve_asset(asset_path)
 
-    def _build_config_sync(self) -> dict[str, Any] | None:
+    async def save_selection(
+        self,
+        selection_key: str,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(self._save_selection_sync, selection_key)
+
+    def _build_config_sync(
+        self,
+        selected_selection_key: str | None = None,
+    ) -> dict[str, Any] | None:
         candidates = self._catalog.discover_model_candidates()
         if not candidates:
             return None
 
         model_options = [self._build_model_option(candidate) for candidate in candidates]
-        selected_candidate = self._catalog.select_default_candidate(candidates)
+        selected_candidate = None
+        if selected_selection_key:
+            selected_candidate = self._catalog.candidate_from_selection_key(
+                selected_selection_key,
+            )
+        if selected_candidate is None:
+            selected_candidate = self._catalog.select_default_candidate(candidates)
         selected_selection_key = self._catalog.selection_key_for(selected_candidate)
         selected_option = next(
             option
@@ -92,6 +114,14 @@ class Live2DService:
             "available": True,
             **selected_option,
             "models": model_options,
+        }
+
+    def _save_selection_sync(self, selection_key: str) -> dict[str, Any]:
+        candidate = self._catalog.candidate_from_selection_key(selection_key)
+        if candidate is None:
+            raise ValueError(f"Unknown Live2D model: {selection_key}")
+        return {
+            "selection_key": self._catalog.selection_key_for(candidate),
         }
 
     def _render_model_json_sync(self, asset_path: str) -> str:

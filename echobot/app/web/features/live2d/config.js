@@ -345,6 +345,15 @@ export function createLive2DConfigController(deps) {
             ) {
                 return;
             }
+            await requestJson("/api/web/live2d/selection", {
+                method: "PATCH",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    selection_key: nextLive2DConfig.selection_key,
+                }),
+            });
             persistLive2DSelectionKey(nextLive2DConfig.selection_key);
             setRunStatus(`已上传 Live2D 模型：${buildLive2DModelLabel(uploadedOption)}`);
         } catch (error) {
@@ -401,6 +410,15 @@ export function createLive2DConfigController(deps) {
             ) {
                 return;
             }
+            await requestJson("/api/web/live2d/selection", {
+                method: "PATCH",
+                headers: {
+                    "Content-Type": "application/json",
+                },
+                body: JSON.stringify({
+                    selection_key: nextLive2DConfig.selection_key,
+                }),
+            });
             persistLive2DSelectionKey(nextLive2DConfig.selection_key);
             setRunStatus(`已切换模型：${buildLive2DModelLabel(nextModelOption)}`);
         } catch (error) {

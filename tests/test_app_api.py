@@ -3535,6 +3535,79 @@ class AppApiTests(unittest.TestCase):
             self.assertIn("/api/web/live2d/builtin/mao_pro_en/", payload["live2d"]["model_url"])
             self.assertEqual(200, model_response.status_code)
 
+    def test_web_console_persists_selected_live2d_model_for_all_frontends(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+
+            app = create_app(
+                runtime_options=RuntimeOptions(
+                    workspace=workspace,
+                    no_tools=True,
+                    no_skills=True,
+                    no_memory=True,
+                    no_heartbeat=True,
+                ),
+                channel_config_path=workspace / ".echobot" / "channels.json",
+                context_builder=build_test_context,
+                tts_service_builder=build_test_tts_service,
+                asr_service_builder=build_test_asr_service,
+            )
+
+            with TestClient(app) as client:
+                initial_config = client.get("/api/web/config")
+                persisted = client.patch(
+                    "/api/web/live2d/selection",
+                    json={
+                        "selection_key": "builtin:mao_pro_en/runtime/mao_pro.model3.json",
+                    },
+                )
+                updated_config = client.get("/api/web/config")
+
+            self.assertEqual(200, initial_config.status_code)
+            self.assertEqual(200, persisted.status_code)
+            self.assertEqual(200, updated_config.status_code)
+            self.assertEqual(
+                "builtin:mao_pro_en/runtime/mao_pro.model3.json",
+                persisted.json()["selection_key"],
+            )
+            self.assertEqual(
+                "builtin:mao_pro_en/runtime/mao_pro.model3.json",
+                updated_config.json()["live2d"]["selection_key"],
+            )
+            self.assertEqual("mao_pro_en", updated_config.json()["live2d"]["directory_name"])
+
+            settings_path = workspace / ".echobot" / "runtime_settings.json"
+            self.assertTrue(settings_path.exists())
+            settings_payload = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "builtin:mao_pro_en/runtime/mao_pro.model3.json",
+                settings_payload["selected_live2d_model"],
+            )
+
+            restarted_app = create_app(
+                runtime_options=RuntimeOptions(
+                    workspace=workspace,
+                    no_tools=True,
+                    no_skills=True,
+                    no_memory=True,
+                    no_heartbeat=True,
+                ),
+                channel_config_path=workspace / ".echobot" / "channels.json",
+                context_builder=build_test_context,
+                tts_service_builder=build_test_tts_service,
+                asr_service_builder=build_test_asr_service,
+            )
+
+            with TestClient(restarted_app) as client:
+                restarted_config = client.get("/api/web/config")
+
+            self.assertEqual(200, restarted_config.status_code)
+            self.assertEqual(
+                "builtin:mao_pro_en/runtime/mao_pro.model3.json",
+                restarted_config.json()["live2d"]["selection_key"],
+            )
+            self.assertEqual("mao_pro_en", restarted_config.json()["live2d"]["directory_name"])
+
     def test_web_tts_routes_work_with_injected_service(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)

@@ -348,6 +348,14 @@ class WebLive2DHotkeyResponse(WebLive2DHotkeyModel):
     selection_key: str = ""
 
 
+class UpdateWebLive2DSelectionRequest(BaseModel):
+    selection_key: str = ""
+
+
+class WebLive2DSelectionResponse(BaseModel):
+    selection_key: str = ""
+
+
 class WebLive2DModelOptionModel(BaseModel):
     source: str = ""
     selection_key: str = ""

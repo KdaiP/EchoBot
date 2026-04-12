@@ -14,12 +14,14 @@ from ..schemas import (
     UpdateWebASRProviderRequest,
     UpdateWebLive2DAnnotationRequest,
     UpdateWebLive2DHotkeyRequest,
+    UpdateWebLive2DSelectionRequest,
     UpdateWebRuntimeConfigRequest,
     WebASRConfigModel,
     WebLive2DAnnotationResponse,
     WebConfigResponse,
     WebLive2DConfigModel,
     WebLive2DHotkeyResponse,
+    WebLive2DSelectionResponse,
     WebRuntimeConfigModel,
     WebStageConfigModel,
 )
@@ -211,6 +213,21 @@ async def update_live2d_hotkey(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return WebLive2DHotkeyResponse(**payload)
+
+
+@router.patch("/web/live2d/selection", response_model=WebLive2DSelectionResponse)
+async def update_live2d_selection(
+    request: UpdateWebLive2DSelectionRequest,
+    runtime=Depends(get_app_runtime),
+) -> WebLive2DSelectionResponse:
+    try:
+        payload = await runtime.web_console_service.save_selected_live2d_model(
+            selection_key=request.selection_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return WebLive2DSelectionResponse(**payload)
 
 
 @router.get("/web/tts/voices", response_model=TTSVoicesResponse)

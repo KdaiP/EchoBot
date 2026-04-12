@@ -39,6 +39,14 @@ function createWindow() {
     },
   });
 
+  if (process.platform === "darwin") {
+    mainWindow.setVisibleOnAllWorkspaces(true, {
+      visibleOnFullScreen: true,
+    });
+    mainWindow.setAlwaysOnTop(true, "screen-saver");
+    mainWindow.setFullScreenable(false);
+  }
+
   mainWindow.setIgnoreMouseEvents(true, {
     forward: true,
   });
