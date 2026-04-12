@@ -19,6 +19,7 @@ import { createLive2DModule } from "./features/live2d/index.js";
 import { createRolesModule } from "./features/roles.js";
 import { createSessionsModule } from "./features/sessions.js";
 import { createTtsModule } from "./features/tts.js";
+import { createLive2DBroadcastSender } from "./features/live2d/broadcast.js";
 import {
     addMessage,
     addSystemMessage,
@@ -38,6 +39,9 @@ import {
 } from "./modules/utils.js";
 
 const status = createUiStatusController();
+const live2dBroadcast = createLive2DBroadcastSender();
+const MOUTH_BROADCAST_INTERVAL_MS = 33;
+let lastMouthBroadcastAt = 0;
 const layout = createLayoutModule({
     addMessage,
     formatTimestamp,
@@ -46,6 +50,49 @@ const layout = createLayoutModule({
 });
 const live2d = createLive2DModule({
     clamp,
+    onLive2DExpressionToggled(payload) {
+        const expressionItem = payload?.expressionItem;
+        const result = payload?.result;
+        live2dBroadcast.sendExpressionToggled({
+            selectionKey: payload?.selectionKey || "",
+            expressionItem: expressionItem
+                ? {
+                    file: expressionItem.file,
+                    name: expressionItem.name,
+                    url: expressionItem.url,
+                }
+                : null,
+            active: Boolean(result?.active),
+        });
+    },
+    onLive2DModelLoaded(payload) {
+        live2dBroadcast.sendModelChanged(payload?.live2dConfig || null);
+    },
+    onLive2DMotionPlayed(payload) {
+        const motionItem = payload?.motionItem;
+        live2dBroadcast.sendMotionPlayed({
+            selectionKey: payload?.selectionKey || "",
+            motionItem: motionItem
+                ? {
+                    file: motionItem.file,
+                    group: motionItem.group,
+                    index: motionItem.index,
+                    name: motionItem.name,
+                }
+                : null,
+        });
+    },
+    onLive2DMouthValue(payload) {
+        const now = typeof performance !== "undefined" ? performance.now() : Date.now();
+        if (now - lastMouthBroadcastAt < MOUTH_BROADCAST_INTERVAL_MS) {
+            return;
+        }
+        lastMouthBroadcastAt = now;
+        live2dBroadcast.sendMouthValue(payload?.value ?? 0);
+    },
+    onLive2DMouseFollowChanged(payload) {
+        live2dBroadcast.sendMouseFollowChanged(payload?.enabled);
+    },
     requestJson,
     roundTo,
     responseToError,
@@ -140,6 +187,9 @@ roles.bindSessionHooks({
 });
 
 document.addEventListener("DOMContentLoaded", initializePage);
+window.addEventListener("beforeunload", () => {
+    live2dBroadcast.close();
+}, { once: true });
 
 async function initializePage() {
     layout.ensureSidebarToggleButtons();

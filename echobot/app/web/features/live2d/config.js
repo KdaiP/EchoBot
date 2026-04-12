@@ -18,6 +18,7 @@ import {
 
 export function createLive2DConfigController(deps) {
     const {
+        requestJson,
         responseToError,
         setRunStatus,
         setStageMessage,
@@ -303,6 +304,7 @@ export function createLive2DConfigController(deps) {
         updateLive2DUploadControls({ isUploading: true });
         setRunStatus("正在上传 Live2D 文件夹…");
 
+        let didLoadUploadedModel = false;
         try {
             const formData = new FormData();
             uploadEntries.forEach((item) => {
@@ -338,6 +340,7 @@ export function createLive2DConfigController(deps) {
             renderLive2DControls(nextLive2DConfig);
 
             const didLoadModel = await loadPromise;
+            didLoadUploadedModel = didLoadModel;
             renderLive2DControls(appState.config.live2d);
             if (
                 !didLoadModel
@@ -358,11 +361,23 @@ export function createLive2DConfigController(deps) {
             setRunStatus(`已上传 Live2D 模型：${buildLive2DModelLabel(uploadedOption)}`);
         } catch (error) {
             console.error(error);
-            appState.config.live2d = previousLive2DConfig;
-            renderLive2DModelOptions(previousModelOptions, previousLive2DConfig.selection_key);
-            renderLive2DControls(previousLive2DConfig);
-            persistLive2DSelectionKey(previousLive2DConfig.selection_key);
-            setRunStatus(error.message || "Live2D 文件夹上传失败");
+            if (!didLoadUploadedModel) {
+                appState.config.live2d = previousLive2DConfig;
+                renderLive2DModelOptions(previousModelOptions, previousLive2DConfig.selection_key);
+                renderLive2DControls(previousLive2DConfig);
+                persistLive2DSelectionKey(previousLive2DConfig.selection_key);
+                setRunStatus(error.message || "Live2D 文件夹上传失败");
+            } else {
+                const currentSelectionKey = appState.config?.live2d?.selection_key;
+                if (currentSelectionKey) {
+                    persistLive2DSelectionKey(currentSelectionKey);
+                }
+                renderLive2DModelOptions(
+                    resolveLive2DModelOptions(appState.config.live2d),
+                    appState.config.live2d.selection_key,
+                );
+                setRunStatus(`模型已加载，但保存失败：${error.message || error}`);
+            }
         } finally {
             updateLive2DUploadControls();
         }
@@ -400,8 +415,10 @@ export function createLive2DConfigController(deps) {
         renderLive2DControls(nextLive2DConfig);
         setRunStatus(`切换模型中：${buildLive2DModelLabel(nextModelOption)}`);
 
+        let didLoadNextModel = false;
         try {
             const didLoadModel = await loadPromise;
+            didLoadNextModel = didLoadModel;
             renderLive2DControls(appState.config.live2d);
             updateLive2DUploadControls();
             if (
@@ -426,14 +443,23 @@ export function createLive2DConfigController(deps) {
             if (appState.config.live2d.selection_key !== nextLive2DConfig.selection_key) {
                 return;
             }
-            appState.config.live2d = previousLive2DConfig;
-            renderLive2DModelOptions(modelOptions, previousLive2DConfig.selection_key);
-            renderLive2DControls(previousLive2DConfig);
-            persistLive2DSelectionKey(previousLive2DConfig.selection_key);
+            if (!didLoadNextModel) {
+                appState.config.live2d = previousLive2DConfig;
+                renderLive2DModelOptions(modelOptions, previousLive2DConfig.selection_key);
+                renderLive2DControls(previousLive2DConfig);
+                persistLive2DSelectionKey(previousLive2DConfig.selection_key);
+            } else {
+                persistLive2DSelectionKey(nextLive2DConfig.selection_key);
+                renderLive2DModelOptions(modelOptions, nextLive2DConfig.selection_key);
+                renderLive2DControls(nextLive2DConfig);
+            }
             updateLive2DUploadControls();
 
-
-            setRunStatus(error.message || "Live2D 模型加载失败");
+            setRunStatus(
+                didLoadNextModel
+                    ? `模型已切换，但保存失败：${error.message || error}`
+                    : (error.message || "Live2D 模型加载失败"),
+            );
         }
     }
 

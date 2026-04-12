@@ -3,6 +3,7 @@ import { DOM } from "./core/dom.js";
 import { appState, asrState, audioState, sessionState } from "./core/store.js";
 import { createAsrModule } from "./features/asr.js";
 import { createLive2DModule } from "./features/live2d/index.js";
+import { createLive2DBroadcastReceiver } from "./features/live2d/broadcast.js";
 import {
     findDesktopMouseCaptureIntent,
     getDesktopResizeEdge,
@@ -15,7 +16,11 @@ import {
     mapScreenPointToStagePoint,
 } from "./features/live2d/desktop-cursor.js";
 import { createTtsModule } from "./features/tts.js";
-import { DEFAULT_STAGE_EFFECT_SETTINGS, STAGE_EFFECTS_STORAGE_KEY } from "./features/live2d/constants.js";
+import {
+    DEFAULT_STAGE_EFFECT_SETTINGS,
+    LIVE2D_SELECTION_STORAGE_KEY,
+    STAGE_EFFECTS_STORAGE_KEY,
+} from "./features/live2d/constants.js";
 import {
     addMessage,
     addSystemMessage,
@@ -39,8 +44,11 @@ import {
 const DESKTOP_WEB_URL = "http://127.0.0.1:8000/web";
 const DESKTOP_ROUTE_URL = "http://127.0.0.1:8000/desktop";
 const DESKTOP_CURSOR_POLL_INTERVAL_MS = 33;
+const DESKTOP_LIVE2D_SYNC_POLL_INTERVAL_MS = 2000;
 
 let desktopCursorPollTimerId = 0;
+let desktopLive2DSyncPollTimerId = 0;
+let desktopLive2DSyncInFlight = false;
 let desktopMousePassthroughEnabled = null;
 let desktopResizeResetTimerId = 0;
 
@@ -51,6 +59,86 @@ const live2d = createLive2DModule({
     roundTo,
     responseToError,
     setRunStatus: status.setRunStatus,
+});
+const live2dBroadcastReceiver = createLive2DBroadcastReceiver({
+    async onModelChanged(payload) {
+        const live2dConfig = payload?.live2dConfig;
+        if (!live2dConfig || !live2dConfig.available) {
+            return;
+        }
+
+        if (!appState.config) {
+            return;
+        }
+
+        appState.config.live2d = live2dConfig;
+        live2d.renderLive2DControls(live2dConfig);
+        await live2d.loadLive2DModel(live2dConfig);
+    },
+    async onExpressionToggled(payload) {
+        const live2dConfig = appState.config?.live2d;
+        if (!live2dConfig || !live2dConfig.available) {
+            return;
+        }
+
+        const selectionKey = String(payload?.selectionKey || live2dConfig.selection_key || "").trim();
+        const expressionFile = String(payload?.expressionItem?.file || "").trim();
+        if (!selectionKey || !expressionFile) {
+            return;
+        }
+
+        const expressionItem = (live2dConfig.expressions || []).find(
+            (item) => item.file === expressionFile,
+        ) || payload.expressionItem;
+        if (!expressionItem) {
+            return;
+        }
+
+        const desiredActive = Boolean(payload?.active);
+        const currentActive = live2d.isExpressionActive(selectionKey, expressionFile);
+        if (currentActive === desiredActive) {
+            return;
+        }
+
+        await live2d.toggleExpression(expressionItem, selectionKey);
+        live2d.renderLive2DControls(live2dConfig);
+    },
+    async onMotionPlayed(payload) {
+        const live2dConfig = appState.config?.live2d;
+        if (!live2dConfig || !live2dConfig.available) {
+            return;
+        }
+
+        const selectionKey = String(payload?.selectionKey || live2dConfig.selection_key || "").trim();
+        const motionFile = String(payload?.motionItem?.file || "").trim();
+        if (!selectionKey || !motionFile) {
+            return;
+        }
+
+        const motionItem = (live2dConfig.motions || []).find(
+            (item) => item.file === motionFile,
+        ) || payload.motionItem;
+        if (!motionItem) {
+            return;
+        }
+
+        await live2d.playMotion(motionItem, selectionKey);
+    },
+    onMouthValue(payload) {
+        const mouthValue = Number(payload?.value);
+        if (!Number.isFinite(mouthValue)) {
+            return;
+        }
+
+        live2d.applyMouthValue(appState.config?.live2d, mouthValue);
+    },
+    onMouseFollowChanged(payload) {
+        const enabled = Boolean(payload?.enabled);
+        live2d.setLive2DMouseFollowEnabled(enabled);
+        if (DOM.live2dMouseFollowCheckbox) {
+            DOM.live2dMouseFollowCheckbox.checked = enabled;
+        }
+    },
 });
 const tts = createTtsModule({
     addMessage,
@@ -103,6 +191,7 @@ async function initializeDesktopPage() {
         live2d.initializePixiApplication();
         await live2d.loadLive2DModel(live2dConfig);
         startDesktopCursorPolling();
+        startDesktopLive2DSyncPolling();
 
         await tts.loadTtsOptions(config.tts);
         asr.applyAsrStatus(config.asr);
@@ -142,12 +231,15 @@ function wireDesktopEvents() {
     DOM.resetViewButton?.addEventListener("click", () => {
         live2d.resetLive2DViewToDefault();
     });
+    DOM.stageElement?.addEventListener("wheel", live2d.handleStageWheel, { passive: false });
     window.addEventListener("resize", handleDesktopWindowResize);
 
     window.addEventListener("beforeunload", () => {
         stopDesktopCursorPolling();
+        stopDesktopLive2DSyncPolling();
         asr.handleBeforeUnload();
         tts.stopSpeechPlayback();
+        live2dBroadcastReceiver.close();
         if (desktopResizeResetTimerId) {
             window.clearTimeout(desktopResizeResetTimerId);
             desktopResizeResetTimerId = 0;
@@ -155,6 +247,7 @@ function wireDesktopEvents() {
         window.removeEventListener("resize", handleDesktopWindowResize);
         document.removeEventListener("pointerover", handleDesktopPointerOver, true);
         document.removeEventListener("pointerout", handleDesktopPointerOut, true);
+        DOM.stageElement?.removeEventListener("wheel", live2d.handleStageWheel);
     });
 }
 
@@ -220,6 +313,54 @@ function stopDesktopCursorPolling() {
 
     window.clearInterval(desktopCursorPollTimerId);
     desktopCursorPollTimerId = 0;
+}
+
+function startDesktopLive2DSyncPolling() {
+    stopDesktopLive2DSyncPolling();
+
+    desktopLive2DSyncPollTimerId = window.setInterval(() => {
+        void syncDesktopLive2DSelectionFromServer();
+    }, DESKTOP_LIVE2D_SYNC_POLL_INTERVAL_MS);
+}
+
+function stopDesktopLive2DSyncPolling() {
+    if (!desktopLive2DSyncPollTimerId) {
+        return;
+    }
+
+    window.clearInterval(desktopLive2DSyncPollTimerId);
+    desktopLive2DSyncPollTimerId = 0;
+}
+
+async function syncDesktopLive2DSelectionFromServer() {
+    if (desktopLive2DSyncInFlight) {
+        return;
+    }
+
+    if (!appState.config?.live2d?.available) {
+        return;
+    }
+
+    desktopLive2DSyncInFlight = true;
+    try {
+        const config = await requestJson("/api/web/config");
+        const serverSelectionKey = String(config?.live2d?.selection_key || "").trim();
+        const localSelectionKey = String(appState.config?.live2d?.selection_key || "").trim();
+        if (!serverSelectionKey || serverSelectionKey === localSelectionKey) {
+            return;
+        }
+
+        const serverLive2DConfig = config.live2d;
+        appState.config = config;
+        window.localStorage.setItem(LIVE2D_SELECTION_STORAGE_KEY, serverSelectionKey);
+        live2d.renderLive2DControls(serverLive2DConfig);
+        await live2d.loadLive2DModel(serverLive2DConfig);
+        status.setRunStatus(`桌宠已同步模型：${serverLive2DConfig.model_name || serverSelectionKey}`);
+    } catch (error) {
+        console.warn("Desktop Live2D sync polling failed", error);
+    } finally {
+        desktopLive2DSyncInFlight = false;
+    }
 }
 
 async function syncDesktopCursorFocus() {

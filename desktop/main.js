@@ -6,7 +6,7 @@ const http = require("http");
 const HOST = "127.0.0.1";
 const PORT = 8000;
 const DESKTOP_URL = `http://${HOST}:${PORT}/desktop`;
-const WEB_URL = `http://${HOST}:${PORT}/web`;
+const WEB_URL = `http://localhost:${PORT}/web`;
 const HEALTH_URL = `http://${HOST}:${PORT}/api/health`;
 const ROOT_DIR = path.resolve(__dirname, "..");
 

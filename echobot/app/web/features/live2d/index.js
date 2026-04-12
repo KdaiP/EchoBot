@@ -1,4 +1,5 @@
 import { DOM } from "../../core/dom.js";
+import { live2dState } from "../../core/store.js";
 import { readJson, removeStoredValue, writeJson } from "../../core/storage.js";
 import { createStageBackgroundController } from "./backgrounds.js";
 import { createLive2DConfigController } from "./config.js";
@@ -10,6 +11,11 @@ import { createLive2DSceneController } from "./scene.js";
 export function createLive2DModule(deps) {
     const {
         clamp,
+        onLive2DExpressionToggled,
+        onLive2DModelLoaded,
+        onLive2DMotionPlayed,
+        onLive2DMouthValue,
+        onLive2DMouseFollowChanged,
         requestJson,
         roundTo,
         responseToError,
@@ -66,13 +72,31 @@ export function createLive2DModule(deps) {
         isExpressionActive(...args) {
             return modelController.isExpressionActive(...args);
         },
-        playMotion(...args) {
-            return modelController.playMotion(...args);
+        async playMotion(...args) {
+            const [motionItem, selectionKey = ""] = args;
+            const result = await modelController.playMotion(...args);
+            if (typeof onLive2DMotionPlayed === "function") {
+                onLive2DMotionPlayed({
+                    motionItem,
+                    selectionKey,
+                    result,
+                });
+            }
+            return result;
         },
         requestJson,
         setRunStatus,
-        toggleExpression(...args) {
-            return modelController.toggleExpression(...args);
+        async toggleExpression(...args) {
+            const [expressionItem, selectionKey = ""] = args;
+            const result = await modelController.toggleExpression(...args);
+            if (typeof onLive2DExpressionToggled === "function") {
+                onLive2DExpressionToggled({
+                    expressionItem,
+                    selectionKey,
+                    result,
+                });
+            }
+            return result;
         },
         triggerHotkey(...args) {
             return modelController.triggerHotkey(...args);
@@ -99,7 +123,18 @@ export function createLive2DModule(deps) {
         },
     });
 
+    async function loadLive2DModelWithHooks(live2dConfig) {
+        const didLoadModel = await modelController.loadLive2DModel(live2dConfig);
+        if (didLoadModel && typeof onLive2DModelLoaded === "function") {
+            onLive2DModelLoaded({
+                live2dConfig,
+            });
+        }
+        return didLoadModel;
+    }
+
     const configController = createLive2DConfigController({
+        requestJson,
         responseToError,
         setRunStatus,
         setStageMessage,
@@ -116,7 +151,7 @@ export function createLive2DModule(deps) {
             return backgroundController.normalizeStageConfig(...args);
         },
         loadLive2DModel(...args) {
-            return modelController.loadLive2DModel(...args);
+            return loadLive2DModelWithHooks(...args);
         },
         loadSavedStageEffectsSettings(...args) {
             return effectsController.loadSavedStageEffectsSettings(...args);
@@ -139,7 +174,14 @@ export function createLive2DModule(deps) {
         applyConfigToUI: configController.applyConfigToUI,
         applyLive2DMouseFollowSetting: modelController.applyLive2DMouseFollowSetting,
         applyExternalFocusPoint: modelController.applyExternalFocusPoint,
-        applyMouthValue: modelController.applyMouthValue,
+        applyMouthValue(live2dConfig, value) {
+            modelController.applyMouthValue(live2dConfig, value);
+            if (typeof onLive2DMouthValue === "function") {
+                onLive2DMouthValue({
+                    value,
+                });
+            }
+        },
         handleLive2DDirectoryUpload: configController.handleLive2DDirectoryUpload,
         handleLive2DModelChange: configController.handleLive2DModelChange,
         handleLive2DControlsClick: controlsController.handleControlsClick,
@@ -147,7 +189,14 @@ export function createLive2DModule(deps) {
         handleLive2DHotkeyKeyUp: controlsController.handleWindowKeyUp,
         handleLive2DHotkeyWindowBlur: controlsController.handleWindowBlur,
         handleHotkeysToggle: configController.handleHotkeysToggle,
-        handleMouseFollowToggle: configController.handleMouseFollowToggle,
+        handleMouseFollowToggle(...args) {
+            configController.handleMouseFollowToggle(...args);
+            if (typeof onLive2DMouseFollowChanged === "function") {
+                onLive2DMouseFollowChanged({
+                    enabled: live2dState.live2dMouseFollowEnabled,
+                });
+            }
+        },
         handleStageBackgroundChange: backgroundController.handleStageBackgroundChange,
         handleStageBackgroundReset: backgroundController.handleStageBackgroundReset,
         handleStageBackgroundTransformInput: backgroundController.handleStageBackgroundTransformInput,
@@ -157,10 +206,17 @@ export function createLive2DModule(deps) {
         handleStageEffectsReset: effectsController.handleStageEffectsReset,
         handleStageWheel: modelController.handleStageWheel,
         initializePixiApplication: sceneController.initializePixiApplication,
-        loadLive2DModel: modelController.loadLive2DModel,
+        isExpressionActive: modelController.isExpressionActive,
+        loadLive2DModel: loadLive2DModelWithHooks,
+        playMotion: modelController.playMotion,
         renderLive2DControls: controlsController.renderLive2DControls,
         resetLive2DViewToDefault: modelController.resetLive2DViewToDefault,
+        setLive2DMouseFollowEnabled(enabled) {
+            live2dState.live2dMouseFollowEnabled = Boolean(enabled);
+            modelController.applyLive2DMouseFollowSetting();
+        },
         setDesktopCursorOverlapFromStagePoint: modelController.setDesktopCursorOverlapFromStagePoint,
         setStageMessage,
+        toggleExpression: modelController.toggleExpression,
     };
 }
