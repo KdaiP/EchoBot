@@ -29,9 +29,3 @@ npm install
 ```bash
 npm start
 ```
-
-## 可选环境变量
-
-- `ECHOBOT_DESKTOP_PYTHON`
-  - 指定 Electron 启动后端时使用的 Python 命令。
-  - 例如：`ECHOBOT_DESKTOP_PYTHON=python3`

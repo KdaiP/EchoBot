@@ -1,6 +1,16 @@
-const { app, BrowserWindow, Tray, Menu, ipcMain, shell, nativeImage, screen } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Tray,
+  Menu,
+  ipcMain,
+  shell,
+  nativeImage,
+  screen,
+  dialog,
+} = require("electron");
 const path = require("path");
-const { spawn } = require("child_process");
+const { spawn, spawnSync } = require("child_process");
 const http = require("http");
 
 const HOST = "127.0.0.1";
@@ -104,12 +114,40 @@ function createTray() {
   });
 }
 
+function resolvePythonForSpawn() {
+  const fromEnv = process.env.ECHOBOT_DESKTOP_PYTHON?.trim();
+  if (fromEnv) {
+    return { command: fromEnv, argsPrefix: [] };
+  }
+
+  const candidates =
+    process.platform === "win32"
+      ? [["python"], ["python3"], ["py", "-3"]]
+      : [["python3"], ["python"]];
+
+  for (const parts of candidates) {
+    const [command, ...argsPrefix] = parts;
+    const probe = spawnSync(command, [...argsPrefix, "--version"], {
+      stdio: "ignore",
+      env: process.env,
+    });
+    if (!probe.error && probe.status === 0) {
+      return { command, argsPrefix };
+    }
+  }
+
+  throw new Error(
+    "EchoBot could not find a working Python on PATH. Install Python 3, " +
+      "or set ECHOBOT_DESKTOP_PYTHON to the python executable (for example /usr/local/bin/python3).",
+  );
+}
+
 function spawnBackend() {
-  const pythonCommand = process.env.ECHOBOT_DESKTOP_PYTHON || "python";
+  const { command, argsPrefix } = resolvePythonForSpawn();
   backendStopping = false;
   backendProcess = spawn(
-    pythonCommand,
-    ["-m", "echobot", "app", "--host", HOST, "--port", String(PORT)],
+    command,
+    [...argsPrefix, "-m", "echobot", "app", "--host", HOST, "--port", String(PORT)],
     {
       cwd: ROOT_DIR,
       stdio: "pipe",
@@ -218,12 +256,15 @@ ipcMain.handle("desktop:get-global-cursor-state", async () => {
 });
 
 app.whenReady().then(async () => {
-  spawnBackend();
-
   try {
+    spawnBackend();
     await waitForBackend();
   } catch (error) {
     console.error(error);
+    const message = error instanceof Error ? error.message : String(error);
+    dialog.showErrorBox("EchoBot Desktop", message);
+    app.quit();
+    return;
   }
 
   createWindow();
