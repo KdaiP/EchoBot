@@ -3,6 +3,7 @@ import { createHeartbeatController } from "./heartbeat.js";
 import { createPanelController } from "./panels.js";
 import { createRuntimeController } from "./runtime.js";
 import { createSidebarController } from "./sidebars.js";
+import { createSplitController } from "./split.js";
 
 export function createLayoutModule(deps) {
     let cron;
@@ -17,6 +18,7 @@ export function createLayoutModule(deps) {
         },
     });
     const sidebars = createSidebarController();
+    const split = createSplitController();
     const runtime = createRuntimeController(deps);
     cron = createCronController({
         formatTimestamp: deps.formatTimestamp,
@@ -35,5 +37,6 @@ export function createLayoutModule(deps) {
         ...panels,
         ...runtime,
         ...sidebars,
+        ...split,
     };
 }

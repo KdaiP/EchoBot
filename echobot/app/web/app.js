@@ -144,6 +144,7 @@ document.addEventListener("DOMContentLoaded", initializePage);
 async function initializePage() {
     layout.ensureSidebarToggleButtons();
     layout.initializeLive2DDrawer();
+    layout.initializePageSplit();
     initializeMessageInteractions();
     wireAppEvents({
         asr,

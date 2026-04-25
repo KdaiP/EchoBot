@@ -1,5 +1,7 @@
 import { DEFAULT_LIP_SYNC_IDS, appState, live2dState } from "../../core/store.js";
 
+const LIVE2D_TRANSFORM_SAVE_DELAY_MS = 140;
+
 export function createLive2DModelController(deps) {
     const {
         clamp,
@@ -9,6 +11,9 @@ export function createLive2DModelController(deps) {
         setStageMessage,
         writeJson,
     } = deps;
+
+    let transformSaveTimerId = 0;
+    let pendingTransformSnapshot = null;
 
     function normalizeSelectionKey(value) {
         return String(value || "").trim();
@@ -86,6 +91,7 @@ export function createLive2DModelController(deps) {
     }
 
     async function loadLive2DModel(live2dConfig) {
+        const loadToken = nextLive2DLoadToken();
         const selectionKey = selectionKeyFromConfig(live2dConfig);
         markSelectionLoading(selectionKey);
         if (!live2dConfig.available || !live2dConfig.model_url) {
@@ -95,7 +101,6 @@ export function createLive2DModelController(deps) {
             return false;
         }
 
-        const loadToken = ++live2dState.live2dLoadToken;
         setStageMessage("正在加载 Live2D 模型…");
 
         try {
@@ -137,7 +142,13 @@ export function createLive2DModelController(deps) {
         }
     }
 
+    function nextLive2DLoadToken() {
+        live2dState.live2dLoadToken += 1;
+        return live2dState.live2dLoadToken;
+    }
+
     function suspendCurrentModelInteractions() {
+        flushLive2DTransformPersist();
         unbindLive2DDrag();
         unbindLive2DFocus();
 
@@ -182,7 +193,7 @@ export function createLive2DModelController(deps) {
             model.x = point.x + live2dState.dragOffsetX;
             model.y = point.y + live2dState.dragOffsetY;
             refreshLive2DFocusFromLastPointer();
-            persistLive2DTransform();
+            scheduleLive2DTransformPersist();
         };
 
         const stopDragging = () => {
@@ -193,7 +204,7 @@ export function createLive2DModelController(deps) {
             live2dState.dragging = false;
             live2dState.dragPointerId = null;
             model.cursor = "grab";
-            persistLive2DTransform();
+            scheduleLive2DTransformPersist({ immediate: true });
         };
 
         model.on("pointerdown", pointerDown);
@@ -522,7 +533,7 @@ export function createLive2DModelController(deps) {
         );
         live2dState.live2dModel.scale.set(nextScale);
         refreshLive2DFocusFromLastPointer();
-        persistLive2DTransform();
+        scheduleLive2DTransformPersist();
     }
 
     function shouldIgnoreStageWheel(event) {
@@ -550,7 +561,7 @@ export function createLive2DModelController(deps) {
 
         applyDefaultLive2DTransform(model);
         refreshLive2DFocusFromLastPointer();
-        persistLive2DTransform();
+        scheduleLive2DTransformPersist({ immediate: true });
     }
 
     function resetLive2DViewToDefault() {
@@ -566,7 +577,7 @@ export function createLive2DModelController(deps) {
         clearSavedLive2DTransform();
         applyDefaultLive2DTransform(model);
         refreshLive2DFocusFromLastPointer();
-        persistLive2DTransform();
+        scheduleLive2DTransformPersist({ immediate: true });
     }
 
     function applyDefaultLive2DTransform(model) {
@@ -600,17 +611,56 @@ export function createLive2DModelController(deps) {
         };
     }
 
-    function persistLive2DTransform() {
-        const model = live2dState.live2dModel;
-        if (!model) {
+    function scheduleLive2DTransformPersist(options = {}) {
+        pendingTransformSnapshot = buildLive2DTransformSnapshot();
+        if (!pendingTransformSnapshot) {
             return;
         }
 
-        writeJson(live2dStorageKey(), {
-            x: roundTo(model.x, 2),
-            y: roundTo(model.y, 2),
-            scale: roundTo(model.scale.x, 4),
-        });
+        if (transformSaveTimerId) {
+            window.clearTimeout(transformSaveTimerId);
+            transformSaveTimerId = 0;
+        }
+
+        if (options.immediate) {
+            flushLive2DTransformPersist();
+            return;
+        }
+
+        transformSaveTimerId = window.setTimeout(() => {
+            transformSaveTimerId = 0;
+            flushLive2DTransformPersist();
+        }, LIVE2D_TRANSFORM_SAVE_DELAY_MS);
+    }
+
+    function flushLive2DTransformPersist() {
+        if (transformSaveTimerId) {
+            window.clearTimeout(transformSaveTimerId);
+            transformSaveTimerId = 0;
+        }
+
+        if (!pendingTransformSnapshot) {
+            return;
+        }
+
+        writeJson(pendingTransformSnapshot.storageKey, pendingTransformSnapshot.transform);
+        pendingTransformSnapshot = null;
+    }
+
+    function buildLive2DTransformSnapshot() {
+        const model = live2dState.live2dModel;
+        if (!model) {
+            return null;
+        }
+
+        return {
+            storageKey: live2dStorageKey(),
+            transform: {
+                x: roundTo(model.x, 2),
+                y: roundTo(model.y, 2),
+                scale: roundTo(model.scale.x, 4),
+            },
+        };
     }
 
     function loadSavedLive2DTransform() {

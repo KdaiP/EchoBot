@@ -18,6 +18,8 @@
     --scrollbar-track-border: rgba(87, 57, 34, 0.08);
     --scrollbar-thumb: rgba(166, 81, 49, 0.72);
     --scrollbar-thumb-strong: rgba(143, 52, 25, 0.88);
+    --page-resizer-width: 12px;
+    --chat-panel-width: clamp(340px, 34vw, 960px);
 }
 
 * {
@@ -56,15 +58,56 @@ button {
 
 .page-shell {
     display: grid;
-    grid-template-columns: minmax(0, 1.4fr) minmax(320px, 440px);
+    grid-template-columns: minmax(360px, 1fr) var(--page-resizer-width) minmax(320px, var(--chat-panel-width));
     align-items: stretch;
-    gap: 24px;
+    gap: 6px;
     height: 100vh;
     height: 100dvh;
     min-height: 100vh;
     min-height: 100dvh;
     overflow: hidden;
     padding: 24px;
+}
+
+.page-shell.is-resizing,
+.page-shell.is-resizing * {
+    cursor: col-resize;
+    user-select: none;
+}
+
+.page-resizer {
+    display: flex;
+    align-items: stretch;
+    justify-content: center;
+    width: var(--page-resizer-width);
+    min-width: var(--page-resizer-width);
+    min-height: 0;
+    padding: 0;
+    border: none;
+    border-radius: 999px;
+    background: transparent;
+    cursor: col-resize;
+    touch-action: none;
+}
+
+.page-resizer::before {
+    content: "";
+    width: 4px;
+    border-radius: 999px;
+    background: rgba(87, 57, 34, 0.14);
+    transition: background 0.18s ease, box-shadow 0.18s ease, width 0.18s ease;
+}
+
+.page-resizer:hover::before,
+.page-resizer:focus-visible::before,
+.page-shell.is-resizing .page-resizer::before {
+    width: 6px;
+    background: rgba(202, 92, 54, 0.46);
+    box-shadow: 0 0 0 4px rgba(202, 92, 54, 0.1);
+}
+
+.page-resizer:focus-visible {
+    outline: none;
 }
 
 .stage-panel,

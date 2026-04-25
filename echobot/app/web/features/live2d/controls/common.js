@@ -1,29 +1,7 @@
 export const NOTE_AUTOSAVE_DELAY_MS = 600;
 export const NOTE_FILE_LABEL = "echobot.live2d.json";
 
-export function normalizeLive2DConfig(live2dConfig) {
-    if (!live2dConfig || typeof live2dConfig !== "object") {
-        return {
-            available: false,
-            selection_key: "",
-            expressions: [],
-            motions: [],
-            hotkeys: [],
-            annotations_writable: false,
-            models: [],
-        };
-    }
-
-    return {
-        available: Boolean(live2dConfig.available),
-        selection_key: String(live2dConfig.selection_key || ""),
-        expressions: Array.isArray(live2dConfig.expressions) ? live2dConfig.expressions : [],
-        motions: Array.isArray(live2dConfig.motions) ? live2dConfig.motions : [],
-        hotkeys: Array.isArray(live2dConfig.hotkeys) ? live2dConfig.hotkeys : [],
-        annotations_writable: Boolean(live2dConfig.annotations_writable),
-        models: Array.isArray(live2dConfig.models) ? live2dConfig.models : [],
-    };
-}
+export { normalizeLive2DConfig } from "../schema.js";
 
 export function buildHotkeyKey(hotkeyItem) {
     return hotkeyItem.hotkey_key || hotkeyItem.hotkey_id || `${hotkeyItem.action}:${hotkeyItem.file}`;
@@ -57,6 +35,29 @@ export function sameShortcutTokens(left, right) {
     }
 
     return leftTokens.every((token, index) => token === rightTokens[index]);
+}
+
+export function shortcutTokensMatchPressed(shortcutTokens, pressedTokens) {
+    const normalizedTokens = normalizeShortcutTokens(shortcutTokens);
+    if (normalizedTokens.length === 0 || normalizedTokens.length !== pressedTokens.size) {
+        return false;
+    }
+
+    return normalizedTokens.every((token) => pressedTokens.has(token));
+}
+
+export function findShortcutConflict(hotkeys, currentHotkeyKey, shortcutTokens) {
+    const normalizedTokens = normalizeShortcutTokens(shortcutTokens);
+    if (normalizedTokens.length === 0 || !Array.isArray(hotkeys)) {
+        return null;
+    }
+
+    return hotkeys.find((hotkeyItem) => {
+        if (buildHotkeyKey(hotkeyItem) === currentHotkeyKey) {
+            return false;
+        }
+        return sameShortcutTokens(hotkeyItem.shortcut_tokens || [], normalizedTokens);
+    }) || null;
 }
 
 export function formatShortcutTokens(shortcutTokens) {

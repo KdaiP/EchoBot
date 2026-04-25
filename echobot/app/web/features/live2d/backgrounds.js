@@ -13,6 +13,8 @@ import {
     STAGE_BACKGROUND_STORAGE_KEY,
 } from "./constants.js";
 
+const STAGE_BACKGROUND_TRANSFORM_SAVE_DELAY_MS = 160;
+
 export function createStageBackgroundController(deps) {
     const {
         clamp,
@@ -21,6 +23,9 @@ export function createStageBackgroundController(deps) {
         setRunStatus,
         applyStageEffectsToRuntime,
     } = deps;
+
+    let transformSaveTimerId = 0;
+    let pendingTransformSave = null;
 
     function normalizeStageConfig(stageConfig) {
         const backgrounds = Array.isArray(stageConfig && stageConfig.backgrounds)
@@ -128,7 +133,59 @@ export function createStageBackgroundController(deps) {
         );
     }
 
+    function scheduleStageBackgroundTransformPersist(backgroundKey, transform, options = {}) {
+        pendingTransformSave = {
+            backgroundKey: String(backgroundKey || "default"),
+            transform: normalizeStageBackgroundTransform(transform),
+        };
+
+        if (transformSaveTimerId) {
+            window.clearTimeout(transformSaveTimerId);
+            transformSaveTimerId = 0;
+        }
+
+        if (options.immediate) {
+            flushStageBackgroundTransformPersist();
+            return;
+        }
+
+        transformSaveTimerId = window.setTimeout(() => {
+            transformSaveTimerId = 0;
+            flushStageBackgroundTransformPersist();
+        }, STAGE_BACKGROUND_TRANSFORM_SAVE_DELAY_MS);
+    }
+
+    function flushStageBackgroundTransformPersist() {
+        if (transformSaveTimerId) {
+            window.clearTimeout(transformSaveTimerId);
+            transformSaveTimerId = 0;
+        }
+
+        if (!pendingTransformSave) {
+            return;
+        }
+
+        persistStageBackgroundTransform(
+            pendingTransformSave.backgroundKey,
+            pendingTransformSave.transform,
+        );
+        pendingTransformSave = null;
+    }
+
+    function cancelPendingStageBackgroundTransform(backgroundKey) {
+        if (!pendingTransformSave || pendingTransformSave.backgroundKey !== backgroundKey) {
+            return;
+        }
+
+        if (transformSaveTimerId) {
+            window.clearTimeout(transformSaveTimerId);
+            transformSaveTimerId = 0;
+        }
+        pendingTransformSave = null;
+    }
+
     function clearSavedStageBackgroundTransform(backgroundKey) {
+        cancelPendingStageBackgroundTransform(backgroundKey);
         removeStoredValue(stageBackgroundTransformStorageKey(backgroundKey));
     }
 
@@ -199,6 +256,8 @@ export function createStageBackgroundController(deps) {
     }
 
     function applyStageBackgroundByKey(stageConfig, backgroundKey) {
+        flushStageBackgroundTransformPersist();
+
         const selectedOption = findStageBackgroundOption(stageConfig, backgroundKey)
             || findStageBackgroundOption(stageConfig, stageConfig.default_background_key)
             || null;
@@ -482,7 +541,7 @@ export function createStageBackgroundController(deps) {
         const nextTransform = readStageBackgroundTransformFromInputs();
         live2dState.currentStageBackgroundTransform = nextTransform;
         applyStageBackgroundTransform(nextTransform);
-        persistStageBackgroundTransform(selectedOption.key, nextTransform);
+        scheduleStageBackgroundTransformPersist(selectedOption.key, nextTransform);
         updateStageBackgroundTransformValueLabels(nextTransform);
         updateStageBackgroundDetail(selectedOption, nextTransform);
         updateStageBackgroundControls();

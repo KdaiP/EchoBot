@@ -2317,6 +2317,7 @@ class AppApiTests(unittest.TestCase):
                 self.assertEqual(200, page.status_code)
                 self.assertIn('id="model-select"', page.text)
                 self.assertIn('id="session-sidebar-toggle"', page.text)
+                self.assertIn('id="page-resizer"', page.text)
                 self.assertIn('id="session-list"', page.text)
                 self.assertIn('id="record-button"', page.text)
                 self.assertIn('id="always-listen-checkbox"', page.text)

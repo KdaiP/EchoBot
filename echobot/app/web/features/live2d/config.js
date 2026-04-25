@@ -1,9 +1,5 @@
 import { DOM } from "../../core/dom.js";
-import {
-    DEFAULT_LIP_SYNC_IDS,
-    appState,
-    live2dState,
-} from "../../core/store.js";
+import { appState, live2dState } from "../../core/store.js";
 import {
     readBoolean,
     readString,
@@ -15,6 +11,11 @@ import {
     LIVE2D_MOUSE_FOLLOW_STORAGE_KEY,
     LIVE2D_SELECTION_STORAGE_KEY,
 } from "./constants.js";
+import {
+    buildLive2DConfig,
+    normalizeLive2DModelOption,
+    resolveLive2DModelOptions,
+} from "./schema.js";
 
 export function createLive2DConfigController(deps) {
     const {
@@ -72,97 +73,6 @@ export function createLive2DConfigController(deps) {
         return currentLive2DConfig;
     }
 
-    function resolveLive2DModelOptions(live2dConfig) {
-        const modelOptions = Array.isArray(live2dConfig && live2dConfig.models)
-            ? live2dConfig.models
-            : [];
-        const normalizedOptions = modelOptions
-            .map(normalizeLive2DModelOption)
-            .filter((item) => item.model_url);
-
-        if (normalizedOptions.length > 0) {
-            return normalizedOptions;
-        }
-
-        const fallbackOption = normalizeLive2DModelOption(live2dConfig);
-        return fallbackOption.model_url ? [fallbackOption] : [];
-    }
-
-    function normalizeLive2DModelOption(modelOption) {
-        const lipSyncParameterIds = Array.isArray(modelOption && modelOption.lip_sync_parameter_ids)
-            ? modelOption.lip_sync_parameter_ids.filter((item) => typeof item === "string")
-            : [];
-        return {
-            source: String((modelOption && modelOption.source) || ""),
-            selection_key: String(
-                (modelOption && modelOption.selection_key)
-                || (modelOption && modelOption.model_url)
-                || "",
-            ),
-            model_name: String((modelOption && modelOption.model_name) || ""),
-            model_url: String((modelOption && modelOption.model_url) || ""),
-            directory_name: String((modelOption && modelOption.directory_name) || ""),
-            lip_sync_parameter_ids: lipSyncParameterIds,
-            mouth_form_parameter_id: typeof (modelOption && modelOption.mouth_form_parameter_id) === "string"
-                ? modelOption.mouth_form_parameter_id
-                : null,
-            expressions: normalizeLive2DExpressions(modelOption && modelOption.expressions),
-            motions: normalizeLive2DMotions(modelOption && modelOption.motions),
-            hotkeys: normalizeLive2DHotkeys(modelOption && modelOption.hotkeys),
-            annotations_writable: Boolean(modelOption && modelOption.annotations_writable),
-        };
-    }
-
-    function normalizeLive2DExpressions(items) {
-        return Array.isArray(items)
-            ? items
-                .filter((item) => item && typeof item === "object")
-                .map((item) => ({
-                    name: String(item.name || item.file || ""),
-                    file: String(item.file || ""),
-                    url: String(item.url || ""),
-                    note: String(item.note || ""),
-                }))
-                .filter((item) => item.file && item.url)
-            : [];
-    }
-
-    function normalizeLive2DMotions(items) {
-        return Array.isArray(items)
-            ? items
-                .filter((item) => item && typeof item === "object")
-                .map((item) => ({
-                    name: String(item.name || item.file || ""),
-                    file: String(item.file || ""),
-                    url: String(item.url || ""),
-                    note: String(item.note || ""),
-                    group: String(item.group || ""),
-                    index: Number.isInteger(item.index) ? item.index : 0,
-                }))
-                .filter((item) => item.file && item.url && item.group)
-            : [];
-    }
-
-    function normalizeLive2DHotkeys(items) {
-        return Array.isArray(items)
-            ? items
-                .filter((item) => item && typeof item === "object")
-                .map((item) => ({
-                    hotkey_key: String(item.hotkey_key || item.hotkey_id || ""),
-                    hotkey_id: String(item.hotkey_id || ""),
-                    name: String(item.name || item.action || "热键"),
-                    action: String(item.action || ""),
-                    file: String(item.file || ""),
-                    shortcut_tokens: Array.isArray(item.shortcut_tokens)
-                        ? item.shortcut_tokens.filter((token) => typeof token === "string")
-                        : [],
-                    shortcut_label: String(item.shortcut_label || ""),
-                    target_kind: String(item.target_kind || ""),
-                    supported: Boolean(item.supported),
-                }))
-            : [];
-    }
-
     function resolveInitialLive2DConfig(live2dConfig, modelOptions) {
         const selectedOption = findLive2DModelOption(modelOptions, loadSavedLive2DSelectionKey())
             || findLive2DModelOption(modelOptions, live2dConfig && live2dConfig.selection_key)
@@ -174,44 +84,11 @@ export function createLive2DConfigController(deps) {
     }
 
     function buildCurrentLive2DConfig(selectedOption, modelOptions, options = {}) {
-        if (!selectedOption) {
-            return {
-                available: false,
-                source: "",
-                selection_key: "",
-                model_name: "",
-                model_url: "",
-                directory_name: "",
-                lip_sync_parameter_ids: DEFAULT_LIP_SYNC_IDS.slice(),
-                mouth_form_parameter_id: null,
-                expressions: [],
-                motions: [],
-                hotkeys: [],
-                annotations_writable: false,
-                models: [],
-            };
-        }
-
         const normalizedOption = normalizeLive2DModelOption(selectedOption);
-        const normalizedOptions = modelOptions.map(normalizeLive2DModelOption);
         if (options.persistSelection) {
             persistLive2DSelectionKey(normalizedOption.selection_key);
         }
-        return {
-            available: true,
-            source: normalizedOption.source,
-            selection_key: normalizedOption.selection_key,
-            model_name: normalizedOption.model_name,
-            model_url: normalizedOption.model_url,
-            directory_name: normalizedOption.directory_name,
-            lip_sync_parameter_ids: normalizedOption.lip_sync_parameter_ids,
-            mouth_form_parameter_id: normalizedOption.mouth_form_parameter_id,
-            expressions: normalizedOption.expressions,
-            motions: normalizedOption.motions,
-            hotkeys: normalizedOption.hotkeys,
-            annotations_writable: normalizedOption.annotations_writable,
-            models: normalizedOptions,
-        };
+        return buildLive2DConfig(selectedOption, modelOptions);
     }
 
     function renderLive2DModelOptions(modelOptions, selectedKey) {

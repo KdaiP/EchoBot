@@ -5,10 +5,15 @@
 
     .page-shell {
         grid-template-columns: 1fr;
+        gap: 24px;
         height: auto;
         min-height: 100vh;
         min-height: 100dvh;
         overflow: visible;
+    }
+
+    .page-resizer {
+        display: none;
     }
 
     .stage-panel {

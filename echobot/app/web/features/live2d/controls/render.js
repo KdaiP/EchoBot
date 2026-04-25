@@ -47,16 +47,17 @@ export function createLive2DControlsRenderer(deps) {
             return;
         }
 
-        DOM.live2dExpressionList.innerHTML = "";
         if (!config.available || config.expressions.length === 0) {
-            DOM.live2dExpressionList.appendChild(
-                buildEmptyState("未发现表情文件。"),
+            replaceControlListChildren(
+                DOM.live2dExpressionList,
+                [buildEmptyState("未发现表情文件。")],
             );
             return;
         }
 
-        config.expressions.forEach((expressionItem) => {
-            DOM.live2dExpressionList.appendChild(
+        replaceControlListChildren(
+            DOM.live2dExpressionList,
+            config.expressions.map((expressionItem) => (
                 buildAnnotatableCard({
                     item: expressionItem,
                     selectionKey: config.selection_key,
@@ -68,9 +69,9 @@ export function createLive2DControlsRenderer(deps) {
                     active: isExpressionActive(config.selection_key, expressionItem.file),
                     hotkeys: findAttachedHotkeys(config.hotkeys, "expression", expressionItem.file),
                     hotkeysWritable: config.annotations_writable && runtimeState.canInteract,
-                }),
-            );
-        });
+                })
+            )),
+        );
     }
 
     function renderMotionList(config, runtimeState) {
@@ -78,16 +79,17 @@ export function createLive2DControlsRenderer(deps) {
             return;
         }
 
-        DOM.live2dMotionList.innerHTML = "";
         if (!config.available || config.motions.length === 0) {
-            DOM.live2dMotionList.appendChild(
-                buildEmptyState("未发现动作文件。"),
+            replaceControlListChildren(
+                DOM.live2dMotionList,
+                [buildEmptyState("未发现动作文件。")],
             );
             return;
         }
 
-        config.motions.forEach((motionItem) => {
-            DOM.live2dMotionList.appendChild(
+        replaceControlListChildren(
+            DOM.live2dMotionList,
+            config.motions.map((motionItem) => (
                 buildAnnotatableCard({
                     item: motionItem,
                     selectionKey: config.selection_key,
@@ -99,9 +101,9 @@ export function createLive2DControlsRenderer(deps) {
                     active: false,
                     hotkeys: findAttachedHotkeys(config.hotkeys, "motion", motionItem.file),
                     hotkeysWritable: config.annotations_writable && runtimeState.canInteract,
-                }),
-            );
-        });
+                })
+            )),
+        );
     }
 
     function renderHotkeyList(config, runtimeState) {
@@ -110,24 +112,29 @@ export function createLive2DControlsRenderer(deps) {
         }
 
         const standaloneHotkeys = filterStandaloneHotkeys(config.hotkeys);
-        DOM.live2dHotkeyList.innerHTML = "";
         if (!config.available || standaloneHotkeys.length === 0) {
-            DOM.live2dHotkeyList.appendChild(
-                buildEmptyState("未发现独立热键。"),
+            replaceControlListChildren(
+                DOM.live2dHotkeyList,
+                [buildEmptyState("未发现独立热键。")],
             );
             return;
         }
 
-        standaloneHotkeys.forEach((hotkeyItem) => {
-            DOM.live2dHotkeyList.appendChild(
+        replaceControlListChildren(
+            DOM.live2dHotkeyList,
+            standaloneHotkeys.map((hotkeyItem) => (
                 buildHotkeyCard(
                     hotkeyItem,
                     config.annotations_writable && runtimeState.canInteract,
                     config.selection_key,
                     runtimeState.canInteract,
-                ),
-            );
-        });
+                )
+            )),
+        );
+    }
+
+    function replaceControlListChildren(listElement, children) {
+        listElement.replaceChildren(...children);
     }
 
     function buildRuntimeHint(config, runtimeState) {
@@ -204,8 +211,6 @@ export function createLive2DControlsRenderer(deps) {
         noteInput.dataset.live2dSelectionKey = selectionKey;
         noteInput.dataset.live2dKind = kind;
         noteInput.dataset.live2dFile = item.file;
-        noteInput.addEventListener("input", persistence.handleNoteInput);
-        noteInput.addEventListener("blur", persistence.handleNoteBlur);
         card.appendChild(noteInput);
 
         if (Array.isArray(hotkeys) && hotkeys.length > 0) {
@@ -351,9 +356,6 @@ export function createLive2DControlsRenderer(deps) {
         shortcutInput.disabled = !enabled;
         shortcutInput.dataset.live2dSelectionKey = selectionKey;
         shortcutInput.dataset.live2dHotkeyKey = buildHotkeyKey(hotkeyItem);
-        shortcutInput.addEventListener("keydown", persistence.handleHotkeyInputKeyDown);
-        shortcutInput.addEventListener("focus", persistence.handleHotkeyInputFocus);
-        shortcutInput.addEventListener("blur", persistence.handleHotkeyInputBlur);
         shell.appendChild(shortcutInput);
 
         const clearButton = document.createElement("button");
@@ -366,15 +368,6 @@ export function createLive2DControlsRenderer(deps) {
         clearButton.disabled = !enabled;
         clearButton.setAttribute("aria-label", "恢复默认热键");
         clearButton.title = "恢复默认热键";
-        clearButton.addEventListener("click", (event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            void persistence.restoreHotkeyToDefault({
-                selectionKey: selectionKey,
-                hotkeyKey: buildHotkeyKey(hotkeyItem),
-                shortcutInput: shortcutInput,
-            });
-        });
         shell.appendChild(clearButton);
 
         persistence.setHotkeyInputValue(

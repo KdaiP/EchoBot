@@ -57,9 +57,17 @@ export function wireAppEvents(features) {
 
     bindOptionalChange(DOM.live2dHotkeysCheckbox, live2d.handleHotkeysToggle);
     bindOptionalChange(DOM.live2dMouseFollowCheckbox, live2d.handleMouseFollowToggle);
-    bindOptionalClickHandler(DOM.live2dExpressionList, live2d.handleLive2DControlsClick);
-    bindOptionalClickHandler(DOM.live2dMotionList, live2d.handleLive2DControlsClick);
-    bindOptionalClickHandler(DOM.live2dHotkeyList, live2d.handleLive2DControlsClick);
+    [
+        DOM.live2dExpressionList,
+        DOM.live2dMotionList,
+        DOM.live2dHotkeyList,
+    ].forEach((element) => {
+        bindOptionalClickHandler(element, live2d.handleLive2DControlsClick);
+        bindOptionalEventHandler(element, "input", live2d.handleLive2DControlsInput);
+        bindOptionalEventHandler(element, "keydown", live2d.handleLive2DControlsKeyDown);
+        bindOptionalEventHandler(element, "focusin", live2d.handleLive2DControlsFocusIn);
+        bindOptionalEventHandler(element, "focusout", live2d.handleLive2DControlsFocusOut);
+    });
     DOM.voiceSelect.addEventListener("change", tts.handleVoiceSelectionChange);
     bindOptionalAsyncChange(DOM.ttsProviderSelect, tts.handleTtsProviderChange);
     bindOptionalAsyncChange(DOM.asrProviderSelect, asr.handleAsrProviderChange);
@@ -242,6 +250,14 @@ function bindOptionalClick(element, handler) {
 function bindOptionalClickHandler(element, handler) {
     if (element) {
         element.addEventListener("click", (event) => {
+            void handler(event);
+        });
+    }
+}
+
+function bindOptionalEventHandler(element, eventName, handler) {
+    if (element) {
+        element.addEventListener(eventName, (event) => {
             void handler(event);
         });
     }

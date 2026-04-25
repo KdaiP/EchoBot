@@ -7,6 +7,7 @@ import {
     captureShortcutTokens,
     containsPrimaryShortcutToken,
     describeError,
+    findShortcutConflict,
     formatShortcutTokens,
     normalizeShortcutTokens,
     sameShortcutTokens,
@@ -20,7 +21,7 @@ export function createLive2DControlsPersistence(deps) {
     } = deps;
 
     function handleNoteInput(event) {
-        const input = event.currentTarget;
+        const input = findDelegatedElement(event, ".live2d-note-input");
         if (!input) {
             return;
         }
@@ -34,7 +35,7 @@ export function createLive2DControlsPersistence(deps) {
     }
 
     function handleNoteBlur(event) {
-        const input = event.currentTarget;
+        const input = findDelegatedElement(event, ".live2d-note-input");
         if (!input) {
             return;
         }
@@ -53,7 +54,7 @@ export function createLive2DControlsPersistence(deps) {
     }
 
     function handleHotkeyInputFocus(event) {
-        const input = event.currentTarget;
+        const input = findDelegatedElement(event, ".live2d-hotkey-input");
         const shell = input && input.closest(".live2d-hotkey-input-shell");
         if (shell) {
             shell.classList.add("is-recording");
@@ -61,7 +62,7 @@ export function createLive2DControlsPersistence(deps) {
     }
 
     function handleHotkeyInputBlur(event) {
-        const input = event.currentTarget;
+        const input = findDelegatedElement(event, ".live2d-hotkey-input");
         const shell = input && input.closest(".live2d-hotkey-input-shell");
         if (shell) {
             shell.classList.remove("is-recording");
@@ -69,9 +70,13 @@ export function createLive2DControlsPersistence(deps) {
     }
 
     async function handleHotkeyInputKeyDown(event) {
+        const input = findDelegatedElement(event, ".live2d-hotkey-input");
+        if (!input) {
+            return;
+        }
+
         event.preventDefault();
 
-        const input = event.currentTarget;
         if (!input || input.disabled || event.repeat) {
             return;
         }
@@ -102,12 +107,36 @@ export function createLive2DControlsPersistence(deps) {
             return;
         }
 
+        const conflict = findCurrentShortcutConflict(selectionKey, hotkeyKey, shortcutTokens);
+        if (conflict) {
+            restoreHotkeyInputFromConfig(input, selectionKey, hotkeyKey);
+            setRunStatus(`热键冲突：已被 ${conflict.name || buildHotkeyKey(conflict)} 使用`);
+            return;
+        }
+
         setHotkeyInputValue(input, shortcutTokens);
         await queueHotkeySave({
             selectionKey: selectionKey,
             hotkeyKey: hotkeyKey,
             shortcutTokens: shortcutTokens,
         });
+    }
+
+    function handleControlInput(event) {
+        handleNoteInput(event);
+    }
+
+    function handleControlFocusIn(event) {
+        handleHotkeyInputFocus(event);
+    }
+
+    function handleControlFocusOut(event) {
+        handleHotkeyInputBlur(event);
+        handleNoteBlur(event);
+    }
+
+    function handleControlKeyDown(event) {
+        void handleHotkeyInputKeyDown(event);
     }
 
     function readAnnotationDraftValue(selectionKey, kind, file, fallbackValue) {
@@ -129,6 +158,11 @@ export function createLive2DControlsPersistence(deps) {
         input.dataset.shortcutTokens = JSON.stringify(normalizedTokens);
         input.value = formatShortcutTokens(normalizedTokens);
         syncHotkeyClearButtonState(input, normalizedTokens.length > 0);
+    }
+
+    function restoreHotkeyInputFromConfig(input, selectionKey, hotkeyKey) {
+        const hotkeyItem = findCurrentHotkey(selectionKey, hotkeyKey);
+        setHotkeyInputValue(input, hotkeyItem ? hotkeyItem.shortcut_tokens || [] : []);
     }
 
     async function restoreHotkeyToDefault({ selectionKey, hotkeyKey, shortcutInput, live2dConfig = null }) {
@@ -381,6 +415,33 @@ export function createLive2DControlsPersistence(deps) {
             });
     }
 
+    function findCurrentHotkeys(selectionKey) {
+        const live2dConfig = appState.config && appState.config.live2d;
+        if (!live2dConfig) {
+            return [];
+        }
+
+        const matchingConfig = [live2dConfig, ...(live2dConfig.models || [])]
+            .find((item) => item && item.selection_key === selectionKey);
+        return matchingConfig && Array.isArray(matchingConfig.hotkeys)
+            ? matchingConfig.hotkeys
+            : [];
+    }
+
+    function findCurrentHotkey(selectionKey, hotkeyKey) {
+        return findCurrentHotkeys(selectionKey).find(
+            (item) => buildHotkeyKey(item) === hotkeyKey,
+        ) || null;
+    }
+
+    function findCurrentShortcutConflict(selectionKey, hotkeyKey, shortcutTokens) {
+        return findShortcutConflict(
+            findCurrentHotkeys(selectionKey),
+            hotkeyKey,
+            shortcutTokens,
+        );
+    }
+
     function sameHotkeySaveRequest(left, right) {
         if (!left || !right) {
             return false;
@@ -415,7 +476,34 @@ export function createLive2DControlsPersistence(deps) {
         }
     }
 
+    function findDelegatedElement(event, selector) {
+        const target = event && event.target;
+        if (!target || typeof target.closest !== "function") {
+            return null;
+        }
+
+        const element = target.closest(selector);
+        if (!element) {
+            return null;
+        }
+
+        const currentTarget = event.currentTarget;
+        if (
+            currentTarget
+            && currentTarget !== element
+            && typeof currentTarget.contains === "function"
+            && !currentTarget.contains(element)
+        ) {
+            return null;
+        }
+        return element;
+    }
+
     return {
+        handleControlFocusIn,
+        handleControlFocusOut,
+        handleControlInput,
+        handleControlKeyDown,
         handleHotkeyInputBlur,
         handleHotkeyInputFocus,
         handleHotkeyInputKeyDown,

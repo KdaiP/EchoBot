@@ -20,6 +20,8 @@ export function createLive2DSceneController(deps) {
         syncPixiStageBackground,
     } = deps;
 
+    let stageResizeFrameId = 0;
+
     function updateSceneFilterBounds() {
         if (!live2dState.pixiApp || !live2dState.live2dStage) {
             return;
@@ -32,6 +34,27 @@ export function createLive2DSceneController(deps) {
         if (live2dState.live2dBackgroundLayer) {
             live2dState.live2dBackgroundLayer.filterArea = live2dState.pixiApp.screen;
         }
+    }
+
+    function resizePixiApplicationToStage() {
+        if (!live2dState.pixiApp || !DOM.stageElement) {
+            return;
+        }
+
+        if (typeof live2dState.pixiApp.resize === "function") {
+            live2dState.pixiApp.resize();
+            return;
+        }
+
+        const renderer = live2dState.pixiApp.renderer;
+        if (!renderer || typeof renderer.resize !== "function") {
+            return;
+        }
+
+        renderer.resize(
+            Math.max(Math.floor(DOM.stageElement.clientWidth), 1),
+            Math.max(Math.floor(DOM.stageElement.clientHeight), 1),
+        );
     }
 
     function createStagePostFilter() {
@@ -355,12 +378,28 @@ export function createLive2DSceneController(deps) {
         updateSceneFilterBounds();
     }
 
+    function shouldAnimateStageAtmosphere() {
+        const effects = live2dState.stageEffects || DEFAULT_STAGE_EFFECT_SETTINGS;
+        if (!effects.enabled) {
+            return false;
+        }
+
+        return Boolean(
+            (effects.lightEnabled && effects.lightFloatEnabled)
+            || (effects.particlesEnabled && effects.particleDensity > 0)
+            || effects.grainStrength > 0,
+        );
+    }
+
     function installStageAtmosphereTicker() {
         if (!live2dState.pixiApp || live2dState.stageAtmosphereTick) {
             return;
         }
 
         live2dState.stageAtmosphereTick = () => {
+            if (!shouldAnimateStageAtmosphere()) {
+                return;
+            }
             updateStageAtmosphereFrame();
         };
         live2dState.pixiApp.ticker.add(live2dState.stageAtmosphereTick);
@@ -373,7 +412,13 @@ export function createLive2DSceneController(deps) {
         }
 
         live2dState.stageResizeObserver = new window.ResizeObserver(() => {
-            window.requestAnimationFrame(() => {
+            if (stageResizeFrameId) {
+                return;
+            }
+
+            stageResizeFrameId = window.requestAnimationFrame(() => {
+                stageResizeFrameId = 0;
+                resizePixiApplicationToStage();
                 updateSceneFilterBounds();
                 if (live2dState.pixiApp) {
                     resetAllStageParticles(
@@ -450,6 +495,7 @@ export function createLive2DSceneController(deps) {
         live2dState.live2dStage = live2dState.pixiApp.stage;
         live2dState.live2dStage.interactive = true;
         live2dState.live2dStage.hitArea = live2dState.pixiApp.screen;
+        resizePixiApplicationToStage();
         createStageScene();
     }
 

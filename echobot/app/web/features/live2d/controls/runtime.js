@@ -5,6 +5,7 @@ import {
     normalizeKeyboardEventToken,
     normalizeLive2DConfig,
     shouldIgnoreKeyboardEvent,
+    shortcutTokensMatchPressed,
     syncModifierTokens,
 } from "./common.js";
 
@@ -14,6 +15,7 @@ export function createLive2DControlRuntime(deps) {
         getSelectionRuntimeState,
         playMotion,
         renderLive2DControls,
+        restoreHotkeyToDefault,
         setRunStatus,
         toggleExpression,
         triggerHotkey,
@@ -49,7 +51,7 @@ export function createLive2DControlRuntime(deps) {
             if (controllerState.activeHotkeyIds.has(hotkeyKey)) {
                 return;
             }
-            if (!hotkeyItem.shortcut_tokens.every((token) => controllerState.pressedTokens.has(token))) {
+            if (!shortcutTokensMatchPressed(hotkeyItem.shortcut_tokens, controllerState.pressedTokens)) {
                 return;
             }
 
@@ -138,6 +140,19 @@ export function createLive2DControlRuntime(deps) {
                 await runHotkeyAction(hotkeyItem, {
                     sourceLabel: "热键",
                 });
+                return;
+            }
+
+            if (actionName === "reset-hotkey") {
+                const shortcutInput = control
+                    .closest(".live2d-hotkey-input-shell")
+                    ?.querySelector(".live2d-hotkey-input");
+                await restoreHotkeyToDefault({
+                    selectionKey: live2dConfig.selection_key,
+                    hotkeyKey: hotkeyKey,
+                    shortcutInput: shortcutInput,
+                    live2dConfig: live2dConfig,
+                });
             }
         } catch (error) {
             console.error(error);
@@ -193,8 +208,9 @@ export function createLive2DControlRuntime(deps) {
                 controllerState.activeHotkeyIds.delete(hotkeyKey);
                 return;
             }
-            const stillPressed = hotkeyItem.shortcut_tokens.every(
-                (token) => controllerState.pressedTokens.has(token),
+            const stillPressed = shortcutTokensMatchPressed(
+                hotkeyItem.shortcut_tokens,
+                controllerState.pressedTokens,
             );
             if (!stillPressed) {
                 controllerState.activeHotkeyIds.delete(hotkeyKey);

@@ -29,6 +29,7 @@ export function createLive2DControlsController(deps) {
         getSelectionRuntimeState: deps.getSelectionRuntimeState,
         playMotion: deps.playMotion,
         renderLive2DControls: renderer.renderLive2DControls,
+        restoreHotkeyToDefault: persistence.restoreHotkeyToDefault,
         setRunStatus: deps.setRunStatus,
         toggleExpression: deps.toggleExpression,
         triggerHotkey: deps.triggerHotkey,
@@ -36,6 +37,10 @@ export function createLive2DControlsController(deps) {
 
     return {
         handleControlsClick: runtime.handleControlsClick,
+        handleControlsFocusIn: persistence.handleControlFocusIn,
+        handleControlsFocusOut: persistence.handleControlFocusOut,
+        handleControlsInput: persistence.handleControlInput,
+        handleControlsKeyDown: persistence.handleControlKeyDown,
         resetHotkeyState: runtime.resetHotkeyState,
         handleWindowBlur: runtime.handleWindowBlur,
         handleWindowKeyDown: runtime.handleWindowKeyDown,

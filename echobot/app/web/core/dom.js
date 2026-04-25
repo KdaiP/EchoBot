@@ -56,6 +56,8 @@ export const DOM = {
     messageImageDialogImage: document.getElementById("message-image-dialog-image"),
     messages: document.getElementById("messages"),
     modelSelect: document.getElementById("model-select"),
+    pageResizer: document.getElementById("page-resizer"),
+    pageShell: document.querySelector(".page-shell"),
     promptInput: document.getElementById("prompt-input"),
     recordButton: document.getElementById("record-button"),
     resetViewButton: document.getElementById("reset-view-button"),
