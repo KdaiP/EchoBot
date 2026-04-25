@@ -911,6 +911,7 @@ class ReMeLightMessageConversionTests(unittest.TestCase):
             LLMMessage(
                 role="assistant",
                 content="",
+                reasoning_content="I need to search memory first.",
                 tool_calls=[
                     ToolCall(
                         id="call_1",
@@ -937,6 +938,10 @@ class ReMeLightMessageConversionTests(unittest.TestCase):
 
         round_tripped = _agentscope_messages_to_llm(converted)
         self.assertEqual(messages[1].content, round_tripped[1].content)
+        self.assertEqual(
+            "I need to search memory first.",
+            round_tripped[0].reasoning_content,
+        )
 
 
 class OpenAICompatibleProviderTests(unittest.TestCase):
@@ -980,6 +985,7 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
                         "message": {
                             "role": "assistant",
                             "content": "",
+                            "reasoning_content": "Need current weather before answering.",
                             "tool_calls": [
                                 {
                                     "id": "call_1",
@@ -1004,11 +1010,69 @@ class OpenAICompatibleProviderTests(unittest.TestCase):
 
         self.assertEqual("assistant", response.message.role)
         self.assertEqual("tool_calls", response.finish_reason)
+        self.assertEqual(
+            "Need current weather before answering.",
+            response.reasoning_content,
+        )
         self.assertEqual(1, len(response.tool_calls))
         self.assertEqual("search_weather", response.tool_calls[0].name)
         self.assertEqual(15, response.usage.total_tokens)
         self.assertEqual(6, response.usage.prompt_cache_hit_tokens)
         self.assertEqual(4, response.usage.prompt_cache_miss_tokens)
+
+    def test_build_payload_passes_assistant_reasoning_content_back(self) -> None:
+        payload = self.provider._build_payload(
+            messages=[
+                LLMMessage(role="user", content="weather"),
+                LLMMessage(
+                    role="assistant",
+                    content="",
+                    reasoning_content="Need to activate the weather skill.",
+                    tool_calls=[
+                        ToolCall(
+                            id="call_1",
+                            name="activate_skill",
+                            arguments='{"name":"weather"}',
+                        )
+                    ],
+                ),
+                LLMMessage(
+                    role="tool",
+                    content='{"ok":true}',
+                    tool_call_id="call_1",
+                ),
+            ],
+            tools=None,
+            tool_choice=None,
+            temperature=None,
+            max_tokens=None,
+        )
+
+        assistant_payload = payload["messages"][1]
+        self.assertEqual(
+            "Need to activate the weather skill.",
+            assistant_payload["reasoning_content"],
+        )
+        self.assertEqual("call_1", assistant_payload["tool_calls"][0]["id"])
+
+    def test_parse_response_extracts_think_tags_from_content(self) -> None:
+        response = self.provider._parse_response(
+            {
+                "model": "test-model",
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {
+                            "role": "assistant",
+                            "content": "<think>hidden reasoning</think>\nfinal answer",
+                        },
+                    }
+                ],
+            }
+        )
+
+        self.assertEqual("hidden reasoning", response.reasoning_content)
+        self.assertEqual("final answer", response.message.content)
 
     def test_llm_usage_to_dict_keeps_cache_metrics(self) -> None:
         usage = LLMUsage(

@@ -21,6 +21,14 @@ def _llm_messages_to_agentscope(messages: list[LLMMessage]) -> list[Msg]:
     for message in messages:
         if message.role == "assistant" and message.tool_calls:
             blocks: list[dict[str, Any]] = []
+            if message.reasoning_content:
+                blocks.append(
+                    {
+                        "type": "think",
+                        "think": message.reasoning_content,
+                        "field": message.reasoning_field,
+                    }
+                )
             text_content = message_content_to_text(message.content).strip()
             if text_content:
                 blocks.append(
@@ -67,11 +75,31 @@ def _llm_messages_to_agentscope(messages: list[LLMMessage]) -> list[Msg]:
             )
             continue
 
+        content = normalize_message_content(message.content)
+        if message.role == "assistant" and message.reasoning_content:
+            blocks: list[dict[str, Any]] = [
+                {
+                    "type": "think",
+                    "think": message.reasoning_content,
+                    "field": message.reasoning_field,
+                }
+            ]
+            if isinstance(content, list):
+                blocks.extend(content)
+            elif content.strip():
+                blocks.append(
+                    {
+                        "type": "text",
+                        "text": content,
+                    }
+                )
+            content = blocks
+
         converted.append(
             Msg(
                 name=message.role,
                 role=message.role,
-                content=normalize_message_content(message.content),
+                content=content,
             )
         )
 
@@ -106,6 +134,8 @@ def _agentscope_messages_to_llm(messages: list[Msg]) -> list[LLMMessage]:
             continue
 
         text_content = _collect_text_content(blocks)
+        reasoning_content = _collect_reasoning_content(blocks)
+        reasoning_field = _collect_reasoning_field(blocks)
         if tool_use_blocks:
             converted.append(
                 LLMMessage(
@@ -122,6 +152,8 @@ def _agentscope_messages_to_llm(messages: list[Msg]) -> list[LLMMessage]:
                         )
                         for block in tool_use_blocks
                     ],
+                    reasoning_content=reasoning_content,
+                    reasoning_field=reasoning_field,
                 )
             )
             continue
@@ -130,6 +162,10 @@ def _agentscope_messages_to_llm(messages: list[Msg]) -> list[LLMMessage]:
             LLMMessage(
                 role=message.role,
                 content=_collect_message_content(blocks),
+                reasoning_content=(
+                    reasoning_content if message.role == "assistant" else ""
+                ),
+                reasoning_field=reasoning_field,
             )
         )
 
@@ -143,6 +179,24 @@ def _collect_text_content(blocks: list[dict[str, Any]]) -> str:
         if isinstance(block, dict) and block.get("type") == "text"
     ]
     return "\n\n".join(text for text in texts if text)
+
+
+def _collect_reasoning_content(blocks: list[dict[str, Any]]) -> str:
+    texts = [
+        str(block.get("think", "")).strip()
+        for block in blocks
+        if isinstance(block, dict) and block.get("type") == "think"
+    ]
+    return "\n".join(text for text in texts if text)
+
+
+def _collect_reasoning_field(blocks: list[dict[str, Any]]) -> str:
+    for block in blocks:
+        if not isinstance(block, dict) or block.get("type") != "think":
+            continue
+        if block.get("field") == "reasoning":
+            return "reasoning"
+    return "reasoning_content"
 
 
 def _collect_message_content(

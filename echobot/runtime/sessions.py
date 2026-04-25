@@ -269,7 +269,7 @@ def normalize_session_name(name: str) -> str:
 
 
 def message_to_dict(message: LLMMessage) -> dict[str, Any]:
-    return {
+    data: dict[str, Any] = {
         "role": message.role,
         "content": normalize_message_content(message.content),
         "name": message.name,
@@ -283,6 +283,10 @@ def message_to_dict(message: LLMMessage) -> dict[str, Any]:
             for tool_call in message.tool_calls
         ],
     }
+    if message.role == "assistant" and message.reasoning_content:
+        data["reasoning_content"] = message.reasoning_content
+        data["reasoning_field"] = message.reasoning_field
+    return data
 
 
 def message_from_dict(data: dict[str, Any]) -> LLMMessage:
@@ -299,6 +303,10 @@ def message_from_dict(data: dict[str, Any]) -> LLMMessage:
             )
             for item in data.get("tool_calls", [])
         ],
+        reasoning_content=str(
+            data.get("reasoning_content") or data.get("reasoning") or ""
+        ),
+        reasoning_field=_read_reasoning_field(data.get("reasoning_field")),
     )
 
 
@@ -308,6 +316,13 @@ def _read_optional_text(value: Any) -> str | None:
 
     text = str(value).strip()
     return text or None
+
+
+def _read_reasoning_field(value: Any) -> str:
+    text = str(value or "").strip()
+    if text == "reasoning":
+        return "reasoning"
+    return "reasoning_content"
 
 
 def _read_metadata(value: Any) -> dict[str, Any]:

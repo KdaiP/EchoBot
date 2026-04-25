@@ -29,6 +29,7 @@ class SessionStoreTests(unittest.TestCase):
                     LLMMessage(
                         role="assistant",
                         content="",
+                        reasoning_content="I should call the file reader.",
                         tool_calls=[
                             ToolCall(
                                 id="call_1",
@@ -55,6 +56,10 @@ class SessionStoreTests(unittest.TestCase):
             self.assertEqual(3, len(loaded_session.history))
             self.assertEqual("user", loaded_session.history[0].role)
             self.assertEqual("read_text_file", loaded_session.history[1].tool_calls[0].name)
+            self.assertEqual(
+                "I should call the file reader.",
+                loaded_session.history[1].reasoning_content,
+            )
             self.assertEqual("call_1", loaded_session.history[2].tool_call_id)
 
             lines = (Path(temp_dir) / "sessions" / "demo.jsonl").read_text(

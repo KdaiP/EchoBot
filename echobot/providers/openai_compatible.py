@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -25,6 +26,8 @@ from ..models import (
 from .base import LLMProvider
 
 logger = logging.getLogger(__name__)
+_THINKING_TAG_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
+_REASONING_RESPONSE_FIELDS = ("reasoning_content", "reasoning")
 
 
 @dataclass(slots=True)
@@ -337,8 +340,12 @@ class OpenAICompatibleProvider(LLMProvider):
         choice = choices[0]
         message_data = choice.get("message", {})
         tool_calls: list[ToolCall] = []
-        for item in message_data.get("tool_calls", []):
+        for item in message_data.get("tool_calls") or []:
+            if not isinstance(item, dict):
+                continue
             function_data = item.get("function", {})
+            if not isinstance(function_data, dict):
+                function_data = {}
             tool_calls.append(
                 ToolCall(
                     id=item.get("id", ""),
@@ -347,10 +354,18 @@ class OpenAICompatibleProvider(LLMProvider):
                 )
             )
 
+        content = message_data.get("content") or ""
+        content, tag_reasoning = _extract_thinking_tags_from_content(content)
+        reasoning_content, reasoning_field = _extract_reasoning_content(message_data)
+        if not reasoning_content:
+            reasoning_content = tag_reasoning
+
         assistant_message = LLMMessage(
             role=message_data.get("role", "assistant"),
-            content=normalize_message_content(message_data.get("content") or ""),
+            content=normalize_message_content(content),
             tool_calls=tool_calls,
+            reasoning_content=reasoning_content,
+            reasoning_field=reasoning_field,
         )
 
         return LLMResponse(
@@ -398,6 +413,7 @@ class OpenAICompatibleProvider(LLMProvider):
 
         content = delta.get("content")
         if isinstance(content, str):
+            content, _reasoning_content = _extract_thinking_tags_from_content(content)
             return content
         return ""
 
@@ -425,6 +441,54 @@ def _merge_system_messages(messages: list[LLMMessage]) -> list[LLMMessage]:
 
     merged = LLMMessage(role="system", content="\n\n".join(system_parts))
     return [merged, *messages[rest_start:]]
+
+
+def _extract_reasoning_content(data: dict[str, Any]) -> tuple[str, str]:
+    for field_name in _REASONING_RESPONSE_FIELDS:
+        value = data.get(field_name)
+        if value:
+            return str(value), field_name
+    return "", "reasoning_content"
+
+
+def _extract_thinking_tags_from_content(content: Any) -> tuple[Any, str]:
+    if isinstance(content, str):
+        matches = _THINKING_TAG_PATTERN.findall(content)
+        if not matches:
+            if "</think>" in content:
+                return re.sub(r"</think>\s*$", "", content).strip(), ""
+            return content, ""
+
+        reasoning_content = "\n".join(match.strip() for match in matches if match.strip())
+        cleaned_content = _THINKING_TAG_PATTERN.sub("", content)
+        cleaned_content = re.sub(r"</think>\s*$", "", cleaned_content).strip()
+        return cleaned_content, reasoning_content
+
+    if not isinstance(content, list):
+        return content, ""
+
+    cleaned_blocks: list[Any] = []
+    reasoning_parts: list[str] = []
+    for block in content:
+        if not isinstance(block, dict):
+            cleaned_blocks.append(block)
+            continue
+
+        block_type = str(block.get("type", "")).strip()
+        if block_type == "think":
+            think = str(block.get("think", "")).strip()
+            if think:
+                reasoning_parts.append(think)
+            continue
+        if block_type == "reasoning":
+            reasoning = str(block.get("reasoning") or block.get("text") or "").strip()
+            if reasoning:
+                reasoning_parts.append(reasoning)
+            continue
+
+        cleaned_blocks.append(block)
+
+    return cleaned_blocks, "\n".join(reasoning_parts)
 
 
 def _get_required_env(source: Mapping[str, str], name: str) -> str:

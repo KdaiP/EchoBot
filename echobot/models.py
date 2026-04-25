@@ -6,6 +6,7 @@ from typing import Any, Literal
 
 
 MessageRole = Literal["system", "user", "assistant", "tool"]
+ReasoningField = Literal["reasoning_content", "reasoning"]
 MessageContentBlock = dict[str, Any]
 MessageContent = str | list[MessageContentBlock]
 ImageInput = str | Mapping[str, Any]
@@ -40,6 +41,8 @@ class LLMMessage:
     name: str | None = None
     tool_call_id: str | None = None
     tool_calls: list[ToolCall] = field(default_factory=list)
+    reasoning_content: str = ""
+    reasoning_field: ReasoningField = "reasoning_content"
 
     def to_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -53,6 +56,8 @@ class LLMMessage:
             data["tool_call_id"] = self.tool_call_id
         if self.tool_calls:
             data["tool_calls"] = [tool_call.to_dict() for tool_call in self.tool_calls]
+        if self.role == "assistant" and self.reasoning_content:
+            data[self.reasoning_field] = self.reasoning_content
 
         return data
 
@@ -148,6 +153,10 @@ class LLMResponse:
     usage: LLMUsage = field(default_factory=LLMUsage)
     tool_calls: list[ToolCall] = field(default_factory=list)
     raw_response: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def reasoning_content(self) -> str:
+        return self.message.reasoning_content
 
 
 def _first_usage_int(data: dict[str, Any], *keys: str) -> int | None:
