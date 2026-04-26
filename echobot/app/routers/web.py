@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import asdict
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile, WebSocket, WebSocketDisconnect
@@ -14,12 +15,14 @@ from ..schemas import (
     UpdateWebASRProviderRequest,
     UpdateWebLive2DAnnotationRequest,
     UpdateWebLive2DHotkeyRequest,
+    UpdateWebLive2DSelectionRequest,
     UpdateWebRuntimeConfigRequest,
     WebASRConfigModel,
     WebLive2DAnnotationResponse,
     WebConfigResponse,
     WebLive2DConfigModel,
     WebLive2DHotkeyResponse,
+    WebLive2DSelectionResponse,
     WebRuntimeConfigModel,
     WebStageConfigModel,
 )
@@ -29,6 +32,26 @@ from ...runtime.settings import RuntimeSettingsManager
 
 
 router = APIRouter(tags=["web"])
+
+_DESKTOP_PING_STALE_AFTER_SECONDS = 6.0
+_desktop_last_ping_monotonic = 0.0
+
+
+@router.post("/web/desktop/ping", status_code=204)
+async def desktop_ping() -> Response:
+    """Record that a /desktop client is alive (used by web to avoid double TTS)."""
+    global _desktop_last_ping_monotonic
+    _desktop_last_ping_monotonic = time.monotonic()
+    return Response(status_code=204)
+
+
+@router.get("/web/desktop/active")
+async def desktop_active() -> dict[str, bool]:
+    """True if a desktop client pinged recently."""
+    if _desktop_last_ping_monotonic <= 0.0:
+        return {"active": False}
+    age = time.monotonic() - _desktop_last_ping_monotonic
+    return {"active": age < _DESKTOP_PING_STALE_AFTER_SECONDS}
 
 
 @router.get("/web/config", response_model=WebConfigResponse)
@@ -211,6 +234,21 @@ async def update_live2d_hotkey(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     return WebLive2DHotkeyResponse(**payload)
+
+
+@router.patch("/web/live2d/selection", response_model=WebLive2DSelectionResponse)
+async def update_live2d_selection(
+    request: UpdateWebLive2DSelectionRequest,
+    runtime=Depends(get_app_runtime),
+) -> WebLive2DSelectionResponse:
+    try:
+        payload = await runtime.web_console_service.save_selected_live2d_model(
+            selection_key=request.selection_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return WebLive2DSelectionResponse(**payload)
 
 
 @router.get("/web/tts/voices", response_model=TTSVoicesResponse)

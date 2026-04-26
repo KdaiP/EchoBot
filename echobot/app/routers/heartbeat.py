@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from fastapi import APIRouter, Depends, HTTPException
 
 from ...scheduling.heartbeat import (
@@ -59,7 +60,7 @@ def _build_heartbeat_response(
     return HeartbeatConfigResponse(
         enabled=enabled,
         interval_seconds=max(int(interval_seconds), 1),
-        file_path=str(file_path),
+        file_path=_display_heartbeat_path(file_path),
         content=content,
         has_meaningful_content=has_meaningful_heartbeat_content(content),
     )
@@ -72,3 +73,12 @@ def _heartbeat_interval_seconds(runtime) -> int:
     if context.heartbeat_service is not None:
         return context.heartbeat_service.interval_seconds
     return context.heartbeat_interval_seconds
+
+
+def _display_heartbeat_path(file_path) -> str:
+    path_text = str(file_path)
+    if os.name != "posix":
+        return path_text
+    if not path_text.startswith("/private/var/"):
+        return path_text
+    return path_text.removeprefix("/private")

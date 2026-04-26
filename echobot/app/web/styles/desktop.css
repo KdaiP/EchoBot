@@ -1,0 +1,302 @@
+@import url("./stage.css");
+
+:root {
+    color-scheme: light;
+    --desktop-panel: rgba(255, 251, 246, 0.3);
+    --desktop-line: rgba(126, 92, 69, 0.14);
+    --desktop-shadow: 0 14px 34px rgba(61, 33, 18, 0.08);
+    --desktop-text: rgba(89, 63, 46, 0.42);
+    --desktop-muted: rgba(77, 50, 33, 0.72);
+    --desktop-accent: #ca6e3f;
+    --desktop-accent-strong: #a7552a;
+    --desktop-accent-soft: rgba(216, 130, 83, 0.36);
+}
+
+* {
+    box-sizing: border-box;
+}
+
+html,
+body {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    overflow: hidden;
+    background: transparent;
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    color: var(--desktop-text);
+    -webkit-font-smoothing: antialiased;
+}
+
+body {
+    user-select: none;
+}
+
+.desktop-stage {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: transparent;
+    border: none;
+    border-radius: 28px;
+    --stage-background: transparent;
+    pointer-events: none;
+}
+
+.desktop-live2d-stage {
+    width: 100%;
+    height: 100%;
+    min-height: 100%;
+    border-top: none;
+    background: transparent;
+}
+
+.desktop-stage::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 28px;
+    border: 2px solid rgba(202, 110, 63, 0.92);
+    box-shadow:
+        0 0 0 1px rgba(255, 238, 228, 0.18),
+        0 0 22px rgba(202, 110, 63, 0.3);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms ease;
+    z-index: 11;
+}
+
+.desktop-stage.is-desktop-hovered::after {
+    opacity: 1;
+}
+
+.desktop-resize-corner {
+    position: absolute;
+    width: 24px;
+    height: 24px;
+    pointer-events: auto;
+    z-index: 12;
+    background: transparent;
+}
+
+.desktop-resize-corner-top-left {
+    top: 0;
+    left: 0;
+    cursor: nwse-resize;
+}
+
+.desktop-resize-corner-top-right {
+    top: 0;
+    right: 0;
+    cursor: nesw-resize;
+}
+
+.desktop-resize-corner-bottom-left {
+    bottom: 0;
+    left: 0;
+    cursor: nesw-resize;
+}
+
+.desktop-resize-corner-bottom-right {
+    right: 0;
+    bottom: 0;
+    cursor: nwse-resize;
+}
+
+.desktop-stage::before {
+    content: "";
+    position: absolute;
+    inset: 12px 24px 64px 24px;
+    border-radius: 999px;
+    background: radial-gradient(circle, rgba(76, 52, 35, 0.16) 0%, rgba(76, 52, 35, 0) 70%);
+    filter: blur(20px);
+    pointer-events: none;
+    z-index: 0;
+}
+
+body[data-desktop-transparent-stage="true"] .desktop-stage::before {
+    display: none;
+}
+
+body[data-desktop-transparent-stage="true"] .desktop-live2d-stage {
+    --stage-background: transparent;
+}
+
+body[data-desktop-transparent-stage="true"] .stage-message {
+    background: rgba(255, 249, 241, 0.82);
+    box-shadow: 0 8px 18px rgba(74, 46, 28, 0.08);
+}
+
+#live2d-canvas {
+    z-index: 1;
+}
+
+.stage-background-image,
+.stage-light,
+.stage-gradient,
+.stage-vignette,
+.stage-grain {
+    pointer-events: none;
+}
+
+.stage-light,
+.stage-gradient,
+.stage-vignette,
+.stage-grain {
+    opacity: 0;
+}
+
+.stage-message {
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(78%, 320px);
+    padding: 10px 14px;
+    border-radius: 16px;
+    background: rgba(255, 249, 241, 0.9);
+    color: var(--desktop-muted);
+    box-shadow: 0 10px 24px rgba(74, 46, 28, 0.1);
+}
+
+.desktop-toolbar {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    z-index: 9;
+    pointer-events: auto;
+}
+
+.desktop-tool-button {
+    border: 1px solid var(--desktop-line);
+    border-radius: 999px;
+    width: 46px;
+    height: 46px;
+    padding: 0;
+    background: var(--desktop-panel);
+    color: var(--desktop-text);
+    line-height: 0;
+    cursor: pointer;
+    box-shadow: var(--desktop-shadow);
+    backdrop-filter: blur(10px);
+    transition:
+        transform 120ms ease,
+        background 120ms ease,
+        border-color 120ms ease,
+        color 120ms ease,
+        box-shadow 120ms ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.desktop-drag-control {
+    position: relative;
+    width: 46px;
+    height: 46px;
+    pointer-events: auto;
+}
+
+.desktop-drag-target {
+    position: absolute;
+    inset: -8px;
+    border-radius: 999px;
+    background: transparent;
+    pointer-events: auto;
+    -webkit-app-region: drag;
+    z-index: 1;
+    cursor: move;
+}
+
+.desktop-drag-visual {
+    position: relative;
+    z-index: 2;
+    pointer-events: none;
+    transition:
+        transform 120ms ease,
+        background 120ms ease,
+        border-color 120ms ease,
+        color 120ms ease,
+        box-shadow 120ms ease;
+}
+
+.stage-message,
+#live2d-canvas {
+    pointer-events: none;
+}
+
+.desktop-tool-button:hover {
+    transform: translateY(-1px);
+    border-color: rgba(169, 101, 55, 0.22);
+    color: rgba(89, 63, 46, 0.56);
+}
+
+.desktop-tool-button:active {
+    transform: translateY(0);
+}
+
+.desktop-tool-button.is-active {
+    background: rgba(255, 244, 236, 0.54);
+    border-color: rgba(202, 110, 63, 0.26);
+    color: var(--desktop-accent-strong);
+    box-shadow: 0 14px 28px rgba(202, 110, 63, 0.14);
+}
+
+.desktop-tool-button.is-active .desktop-tool-icon {
+    filter: drop-shadow(0 0 6px rgba(216, 130, 83, 0.16));
+}
+
+.desktop-drag-control:hover .desktop-drag-visual {
+    transform: translateY(-1px);
+    border-color: rgba(169, 101, 55, 0.22);
+    color: rgba(89, 63, 46, 0.56);
+    box-shadow: 0 16px 32px rgba(61, 33, 18, 0.1);
+}
+
+.desktop-drag-control:active .desktop-drag-visual {
+    transform: translateY(0);
+}
+
+.desktop-tool-icon {
+    width: 22px;
+    height: 22px;
+    overflow: visible;
+}
+
+.status-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    padding: 0 10px;
+    border-radius: 999px;
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    background: rgba(212, 191, 173, 0.55);
+    color: var(--desktop-text);
+}
+
+.status-ready {
+    background: rgba(126, 185, 143, 0.24);
+}
+
+.status-busy {
+    background: rgba(240, 177, 81, 0.28);
+}
+
+.status-error {
+    background: rgba(221, 115, 98, 0.28);
+}
+
+.status-idle {
+    background: rgba(186, 174, 201, 0.24);
+}
+
+.desktop-hidden-shell {
+    display: none !important;
+}

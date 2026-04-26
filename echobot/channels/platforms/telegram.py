@@ -39,16 +39,19 @@ if TYPE_CHECKING:  # pragma: no cover
 logger = logging.getLogger(__name__)
 
 _MAX_MESSAGE_LENGTH = 4000
-_BOT_COMMANDS = [
-    BotCommand("new", "Start a new session"),
-    BotCommand("ls", "List sessions"),
-    BotCommand("switch", "Switch to another session"),
-    BotCommand("rename", "Rename the current session"),
-    BotCommand("delete", "Delete the current session"),
-    BotCommand("current", "Show current session"),
-    BotCommand("route", "Show or switch route mode"),
-    BotCommand("help", "Show all commands"),
-]
+if TELEGRAM_AVAILABLE:
+    _BOT_COMMANDS = [
+        BotCommand("new", "Start a new session"),
+        BotCommand("ls", "List sessions"),
+        BotCommand("switch", "Switch to another session"),
+        BotCommand("rename", "Rename the current session"),
+        BotCommand("delete", "Delete the current session"),
+        BotCommand("current", "Show current session"),
+        BotCommand("route", "Show or switch route mode"),
+        BotCommand("help", "Show all commands"),
+    ]
+else:
+    _BOT_COMMANDS = []
 
 
 class TelegramChannel(BaseChannel):

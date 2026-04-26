@@ -2291,6 +2291,101 @@ class AppApiTests(unittest.TestCase):
                 (workspace / ".echobot" / "HEARTBEAT.md").read_text(encoding="utf-8"),
             )
 
+    def test_desktop_routes_expose_minimal_desktop_ui(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            write_test_live2d_model(workspace)
+
+            app = create_app(
+                runtime_options=RuntimeOptions(
+                    workspace=workspace,
+                    no_tools=True,
+                    no_skills=True,
+                    no_memory=True,
+                    no_heartbeat=True,
+                ),
+                channel_config_path=workspace / ".echobot" / "channels.json",
+                context_builder=build_test_context,
+                tts_service_builder=build_test_tts_service,
+                asr_service_builder=build_test_asr_service,
+            )
+
+            with TestClient(app) as client:
+                page = client.get("/desktop")
+                config = client.get("/api/web/config")
+
+                self.assertEqual(200, page.status_code)
+                self.assertIn('id="desktop-stage"', page.text)
+                self.assertIn('id="live2d-stage"', page.text)
+                self.assertIn('class="live2d-stage desktop-live2d-stage"', page.text)
+                self.assertIn('data-desktop-transparent-stage="true"', page.text)
+                self.assertIn('id="live2d-canvas"', page.text)
+                self.assertIn('id="desktop-drag-button"', page.text)
+                self.assertIn('id="desktop-voice-button"', page.text)
+                self.assertIn('id="desktop-web-button"', page.text)
+                self.assertIn('class="desktop-tool-icon"', page.text)
+                web_index = page.text.index('id="desktop-web-button"')
+                voice_index = page.text.index('id="desktop-voice-button"')
+                drag_index = page.text.index('id="desktop-drag-button"')
+                self.assertLess(web_index, voice_index)
+                self.assertLess(voice_index, drag_index)
+                self.assertNotIn(">拖动块<", page.text)
+                self.assertNotIn(">语音服务<", page.text)
+                self.assertNotIn(">Web<", page.text)
+                self.assertIn('class="desktop-toolbar"', page.text)
+                self.assertIn('id="tts-provider-select"', page.text)
+                self.assertIn('id="voice-select"', page.text)
+                self.assertIn('id="asr-provider-select"', page.text)
+                self.assertIn('id="always-listen-checkbox"', page.text)
+                self.assertIn('id="prompt-input"', page.text)
+                self.assertIn('id="chat-form"', page.text)
+                self.assertNotIn('desktop-status-panel', page.text)
+                self.assertNotIn('id="session-sidebar-toggle"', page.text)
+                self.assertNotIn('id="role-sidebar-toggle"', page.text)
+                self.assertNotIn('id="runtime-panel"', page.text)
+                self.assertNotIn('id="heartbeat-panel"', page.text)
+                self.assertNotIn('id="live2d-drawer"', page.text)
+                self.assertIn('EchoBot Desktop Pet', page.text)
+                self.assertEqual(200, config.status_code)
+                self.assertTrue(config.json()["live2d"]["available"])
+
+    def test_web_desktop_active_reflects_ping(self) -> None:
+        from echobot.app.routers import web as web_router_module
+
+        web_router_module._desktop_last_ping_monotonic = 0.0
+        try:
+            with tempfile.TemporaryDirectory() as temp_dir:
+                workspace = Path(temp_dir)
+                write_test_live2d_model(workspace)
+
+                app = create_app(
+                    runtime_options=RuntimeOptions(
+                        workspace=workspace,
+                        no_tools=True,
+                        no_skills=True,
+                        no_memory=True,
+                        no_heartbeat=True,
+                    ),
+                    channel_config_path=workspace / ".echobot" / "channels.json",
+                    context_builder=build_test_context,
+                    tts_service_builder=build_test_tts_service,
+                    asr_service_builder=build_test_asr_service,
+                )
+
+                with TestClient(app) as client:
+                    inactive = client.get("/api/web/desktop/active")
+                    self.assertEqual(200, inactive.status_code)
+                    self.assertFalse(inactive.json()["active"])
+
+                    ping = client.post("/api/web/desktop/ping")
+                    self.assertEqual(204, ping.status_code)
+
+                    active = client.get("/api/web/desktop/active")
+                    self.assertEqual(200, active.status_code)
+                    self.assertTrue(active.json()["active"])
+        finally:
+            web_router_module._desktop_last_ping_monotonic = 0.0
+
     def test_web_console_routes_expose_static_ui_and_live2d_assets(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
@@ -3477,6 +3572,79 @@ class AppApiTests(unittest.TestCase):
             self.assertEqual(["ParamA"], payload["live2d"]["lip_sync_parameter_ids"])
             self.assertIn("/api/web/live2d/builtin/mao_pro_en/", payload["live2d"]["model_url"])
             self.assertEqual(200, model_response.status_code)
+
+    def test_web_console_persists_selected_live2d_model_for_all_frontends(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+
+            app = create_app(
+                runtime_options=RuntimeOptions(
+                    workspace=workspace,
+                    no_tools=True,
+                    no_skills=True,
+                    no_memory=True,
+                    no_heartbeat=True,
+                ),
+                channel_config_path=workspace / ".echobot" / "channels.json",
+                context_builder=build_test_context,
+                tts_service_builder=build_test_tts_service,
+                asr_service_builder=build_test_asr_service,
+            )
+
+            with TestClient(app) as client:
+                initial_config = client.get("/api/web/config")
+                persisted = client.patch(
+                    "/api/web/live2d/selection",
+                    json={
+                        "selection_key": "builtin:mao_pro_en/runtime/mao_pro.model3.json",
+                    },
+                )
+                updated_config = client.get("/api/web/config")
+
+            self.assertEqual(200, initial_config.status_code)
+            self.assertEqual(200, persisted.status_code)
+            self.assertEqual(200, updated_config.status_code)
+            self.assertEqual(
+                "builtin:mao_pro_en/runtime/mao_pro.model3.json",
+                persisted.json()["selection_key"],
+            )
+            self.assertEqual(
+                "builtin:mao_pro_en/runtime/mao_pro.model3.json",
+                updated_config.json()["live2d"]["selection_key"],
+            )
+            self.assertEqual("mao_pro_en", updated_config.json()["live2d"]["directory_name"])
+
+            settings_path = workspace / ".echobot" / "runtime_settings.json"
+            self.assertTrue(settings_path.exists())
+            settings_payload = json.loads(settings_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                "builtin:mao_pro_en/runtime/mao_pro.model3.json",
+                settings_payload["selected_live2d_model"],
+            )
+
+            restarted_app = create_app(
+                runtime_options=RuntimeOptions(
+                    workspace=workspace,
+                    no_tools=True,
+                    no_skills=True,
+                    no_memory=True,
+                    no_heartbeat=True,
+                ),
+                channel_config_path=workspace / ".echobot" / "channels.json",
+                context_builder=build_test_context,
+                tts_service_builder=build_test_tts_service,
+                asr_service_builder=build_test_asr_service,
+            )
+
+            with TestClient(restarted_app) as client:
+                restarted_config = client.get("/api/web/config")
+
+            self.assertEqual(200, restarted_config.status_code)
+            self.assertEqual(
+                "builtin:mao_pro_en/runtime/mao_pro.model3.json",
+                restarted_config.json()["live2d"]["selection_key"],
+            )
+            self.assertEqual("mao_pro_en", restarted_config.json()["live2d"]["directory_name"])
 
     def test_web_tts_routes_work_with_injected_service(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

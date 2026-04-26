@@ -110,6 +110,10 @@ python -m echobot app
 http://127.0.0.1:8000/web
 ```
 
+## 桌面端
+
+设置见[桌面端启动方法](./desktop/README.md)
+
 ## 🎨 个性化配置
 
 ### 👗 导入/切换 Live2D 模型

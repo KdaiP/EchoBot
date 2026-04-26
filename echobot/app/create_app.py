@@ -58,6 +58,10 @@ def create_app(
     async def web_console() -> FileResponse:
         return FileResponse(WEB_ASSETS_DIR / "index.html")
 
+    @app.get("/desktop", include_in_schema=False)
+    async def desktop_console() -> FileResponse:
+        return FileResponse(WEB_ASSETS_DIR / "desktop.html")
+
     @app.get("/favicon.ico", include_in_schema=False)
     async def favicon() -> FileResponse:
         return FileResponse(

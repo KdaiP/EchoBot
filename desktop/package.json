@@ -1,0 +1,13 @@
+{
+  "name": "echobot-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Electron desktop pet shell for EchoBot",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron ."
+  },
+  "devDependencies": {
+    "electron": "^37.0.0"
+  }
+}

@@ -110,6 +110,7 @@ class RuntimeControls:
 class RuntimeSettings:
     delegated_ack_enabled: bool | None = None
     selected_asr_provider: str | None = None
+    selected_live2d_model: str | None = None
     shell_safety_mode: str | None = None
     file_write_enabled: bool | None = None
     cron_mutation_enabled: bool | None = None
@@ -135,6 +136,14 @@ class RuntimeSettings:
         else:
             raise ValueError("selected_asr_provider must be a string")
 
+        raw_live2d_model = extra_values.pop("selected_live2d_model", None)
+        if raw_live2d_model is None:
+            selected_live2d_model = None
+        elif isinstance(raw_live2d_model, str):
+            selected_live2d_model = raw_live2d_model.strip() or None
+        else:
+            raise ValueError("selected_live2d_model must be a string")
+
         raw_shell_safety_mode = extra_values.pop("shell_safety_mode", None)
         if raw_shell_safety_mode is None:
             shell_safety_mode = None
@@ -159,6 +168,7 @@ class RuntimeSettings:
         return cls(
             delegated_ack_enabled=delegated_ack_enabled,
             selected_asr_provider=selected_asr_provider,
+            selected_live2d_model=selected_live2d_model,
             shell_safety_mode=shell_safety_mode,
             file_write_enabled=file_write_enabled,
             cron_mutation_enabled=cron_mutation_enabled,
@@ -172,6 +182,8 @@ class RuntimeSettings:
             data["delegated_ack_enabled"] = self.delegated_ack_enabled
         if self.selected_asr_provider is not None:
             data["selected_asr_provider"] = self.selected_asr_provider
+        if self.selected_live2d_model is not None:
+            data["selected_live2d_model"] = self.selected_live2d_model
         if self.shell_safety_mode is not None:
             data["shell_safety_mode"] = self.shell_safety_mode
         if self.file_write_enabled is not None:
@@ -187,6 +199,8 @@ class RuntimeSettings:
             return self.delegated_ack_enabled
         if name == "selected_asr_provider":
             return self.selected_asr_provider
+        if name == "selected_live2d_model":
+            return self.selected_live2d_model
         if name == "shell_safety_mode":
             return self.shell_safety_mode
         if name == "file_write_enabled":
@@ -211,6 +225,15 @@ class RuntimeSettings:
                 raise ValueError("selected_asr_provider must be a string")
             normalized_value = value.strip()
             self.selected_asr_provider = normalized_value or None
+            return
+        if name == "selected_live2d_model":
+            if value is None:
+                self.selected_live2d_model = None
+                return
+            if not isinstance(value, str):
+                raise ValueError("selected_live2d_model must be a string")
+            normalized_value = value.strip()
+            self.selected_live2d_model = normalized_value or None
             return
         if name == "shell_safety_mode":
             if value is None:
@@ -240,6 +263,9 @@ class RuntimeSettings:
     def clear_named_value(self, name: str) -> None:
         if name == "delegated_ack_enabled":
             self.delegated_ack_enabled = None
+            return
+        if name == "selected_live2d_model":
+            self.selected_live2d_model = None
             return
         if name == "shell_safety_mode":
             self.shell_safety_mode = None

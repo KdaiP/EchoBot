@@ -8,6 +8,7 @@ import {
     DEFAULT_STAGE_RIM_LIGHT_POSITION,
     STAGE_PARTICLE_COUNT,
 } from "./constants.js";
+import { buildPixiApplicationOptions } from "./application-options.js";
 
 export function createLive2DSceneController(deps) {
     const {
@@ -58,16 +59,18 @@ export function createLive2DSceneController(deps) {
     }
 
     function createStagePostFilter() {
-        return new window.PIXI.Filter(undefined, ATMOSPHERE_FILTER_FRAGMENT, {
+        const filter = new window.PIXI.Filter(undefined, ATMOSPHERE_FILTER_FRAGMENT, {
             uLightPos: [DEFAULT_STAGE_LIGHT_POSITION.x, DEFAULT_STAGE_LIGHT_POSITION.y],
-            uAmbientColor: [1.04, 1.02, 1.08],
-            uHighlightColor: [1.0, 0.92, 0.98],
-            uGlowStrength: 0.84,
-            uGrainStrength: 1,
-            uVignetteStrength: 0.2,
+            uAmbientColor: [1, 1, 1],
+            uHighlightColor: [0, 0, 0],
+            uGlowStrength: 0,
+            uGrainStrength: 0,
+            uVignetteStrength: 0,
             uPulse: 1,
             uTime: 0,
         });
+        filter.enabled = false;
+        return filter;
     }
 
     function randomBetween(min, max) {
@@ -444,7 +447,7 @@ export function createLive2DSceneController(deps) {
         live2dState.stageLightCurrentY = DEFAULT_STAGE_LIGHT_POSITION.y;
 
         live2dState.stageBackgroundBlurFilter = new window.PIXI.filters.BlurFilter();
-        live2dState.stageBackgroundBlurFilter.blur = 1.2;
+        live2dState.stageBackgroundBlurFilter.blur = 0;
         live2dState.live2dBackgroundLayer.filters = [live2dState.stageBackgroundBlurFilter];
 
         live2dState.stagePostFilter = createStagePostFilter();
@@ -463,7 +466,6 @@ export function createLive2DSceneController(deps) {
         }
 
         ensureStageResizeObserver();
-        installStageAtmosphereTicker();
         updateSceneFilterBounds();
         applyStageEffectsSettings(
             live2dState.stageEffects || DEFAULT_STAGE_EFFECT_SETTINGS,
@@ -474,6 +476,7 @@ export function createLive2DSceneController(deps) {
         const activeTransform = live2dState.currentStageBackgroundTransform
             || DEFAULT_STAGE_BACKGROUND_TRANSFORM;
         void syncPixiStageBackground(activeBackground, activeTransform);
+        installStageAtmosphereTicker();
     }
 
     function initializePixiApplication() {
@@ -485,13 +488,12 @@ export function createLive2DSceneController(deps) {
             throw new Error("Failed to load pixi-live2d-display");
         }
 
-        live2dState.pixiApp = new window.PIXI.Application({
-            view: document.getElementById("live2d-canvas"),
-            resizeTo: DOM.stageElement,
-            autoStart: true,
-            antialias: true,
-            backgroundAlpha: 0,
-        });
+        live2dState.pixiApp = new window.PIXI.Application(
+            buildPixiApplicationOptions({
+                view: document.getElementById("live2d-canvas"),
+                resizeTo: DOM.stageElement,
+            }),
+        );
         live2dState.live2dStage = live2dState.pixiApp.stage;
         live2dState.live2dStage.interactive = true;
         live2dState.live2dStage.hitArea = live2dState.pixiApp.screen;

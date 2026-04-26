@@ -27,6 +27,17 @@ class WebRuntimeSettingsService:
         )
         return settings.to_dict()
 
+    async def save_selected_live2d_model(
+        self,
+        selection_key: str,
+    ) -> dict[str, Any]:
+        settings = await asyncio.to_thread(
+            self._store.update_named_value,
+            "selected_live2d_model",
+            selection_key,
+        )
+        return settings.to_dict()
+
 
 __all__ = [
     "WebRuntimeSettingsService",

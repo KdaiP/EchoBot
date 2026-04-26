@@ -1,4 +1,6 @@
 import { DEFAULT_LIP_SYNC_IDS, appState, live2dState } from "../../core/store.js";
+import { isDesktopTransparentStageEnabled } from "./desktop-stage-mode.js";
+import { resolveDefaultLive2DTransform } from "./default-transform.js";
 
 const LIVE2D_TRANSFORM_SAVE_DELAY_MS = 140;
 
@@ -286,6 +288,107 @@ export function createLive2DModelController(deps) {
             live2dState.live2dLastPointerX,
             live2dState.live2dLastPointerY,
         );
+    }
+
+    function applyExternalFocusPoint(globalX, globalY) {
+        if (
+            !Number.isFinite(globalX)
+            || !Number.isFinite(globalY)
+        ) {
+            return;
+        }
+
+        live2dState.live2dLastPointerX = globalX;
+        live2dState.live2dLastPointerY = globalY;
+        refreshLive2DFocusFromLastPointer();
+    }
+
+    function setDesktopCursorOverlapFromStagePoint(stageX, stageY) {
+        const model = live2dState.live2dModel;
+        if (
+            !model
+            || !Number.isFinite(stageX)
+            || !Number.isFinite(stageY)
+        ) {
+            return false;
+        }
+
+        const overlapping = resolveDesktopCursorCharacterOverlap(
+            model,
+            stageX,
+            stageY,
+        );
+
+        model.visible = !overlapping;
+        return overlapping;
+    }
+
+    function resolveDesktopCursorCharacterOverlap(model, stageX, stageY) {
+        const hitAreas = resolveLive2DHitAreas(model, stageX, stageY);
+        if (hitAreas.length > 0) {
+            return true;
+        }
+
+        return isPointInsideVisibleModelRegion(model, stageX, stageY);
+    }
+
+    function resolveLive2DHitAreas(model, stageX, stageY) {
+        if (typeof model.hitTest !== "function") {
+            return [];
+        }
+
+        try {
+            const hitAreas = model.hitTest(stageX, stageY);
+            return Array.isArray(hitAreas) ? hitAreas.filter(Boolean) : [];
+        } catch (error) {
+            console.warn("Failed to run Live2D hitTest", error);
+            return [];
+        }
+    }
+
+    function isPointInsideVisibleModelRegion(model, stageX, stageY) {
+        if (typeof model.getBounds !== "function") {
+            return false;
+        }
+
+        const bounds = model.getBounds();
+        if (
+            !bounds
+            || !Number.isFinite(bounds.x)
+            || !Number.isFinite(bounds.y)
+            || !Number.isFinite(bounds.width)
+            || !Number.isFinite(bounds.height)
+            || bounds.width <= 0
+            || bounds.height <= 0
+        ) {
+            return false;
+        }
+
+        const visibleRegion = shrinkDesktopModelBounds(bounds);
+        return (
+            stageX >= visibleRegion.x
+            && stageX <= visibleRegion.x + visibleRegion.width
+            && stageY >= visibleRegion.y
+            && stageY <= visibleRegion.y + visibleRegion.height
+        );
+    }
+
+    function shrinkDesktopModelBounds(bounds) {
+        const horizontalInset = Math.min(bounds.width * 0.24, bounds.width * 0.5);
+        const topInset = Math.min(bounds.height * 0.1, bounds.height * 0.5);
+        const bottomInset = Math.min(bounds.height * 0.18, bounds.height * 0.5);
+        const width = Math.max(bounds.width - horizontalInset * 2, bounds.width * 0.2);
+        const height = Math.max(
+            bounds.height - topInset - bottomInset,
+            bounds.height * 0.2,
+        );
+
+        return {
+            x: bounds.x + (bounds.width - width) * 0.5,
+            y: bounds.y + topInset,
+            width: width,
+            height: height,
+        };
     }
 
     function updateLive2DFocusFromGlobalPoint(globalX, globalY) {
@@ -584,12 +687,18 @@ export function createLive2DModelController(deps) {
         const stageWidth = live2dState.pixiApp.screen.width;
         const stageHeight = live2dState.pixiApp.screen.height;
         const baseSize = measureLive2DBaseSize(model);
-        const widthRatio = stageWidth / Math.max(baseSize.width, 1);
-        const heightRatio = stageHeight / Math.max(baseSize.height, 1);
-        const nextScale = Math.min(widthRatio, heightRatio) * 0.82;
+        const defaultTransform = resolveDefaultLive2DTransform({
+            stageWidth: stageWidth,
+            stageHeight: stageHeight,
+            baseWidth: baseSize.width,
+            baseHeight: baseSize.height,
+            desktopTransparentStage: isDesktopTransparentStageEnabled(
+                document.getElementById("desktop-stage"),
+            ),
+        });
 
-        model.scale.set(nextScale);
-        model.position.set(stageWidth * 0.5, stageHeight * 0.62);
+        model.scale.set(defaultTransform.scale);
+        model.position.set(defaultTransform.x, defaultTransform.y);
     }
 
     function measureLive2DBaseSize(model) {
@@ -974,8 +1083,10 @@ export function createLive2DModelController(deps) {
         loadLive2DModel,
         isExpressionActive,
         playMotion,
+        applyExternalFocusPoint,
         refreshLive2DFocusFromLastPointer,
         resetLive2DViewToDefault,
+        setDesktopCursorOverlapFromStagePoint,
         toggleExpression,
         triggerHotkey,
     };

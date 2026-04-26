@@ -12,6 +12,7 @@ import {
     DEFAULT_STAGE_EFFECT_SETTINGS,
     STAGE_BACKGROUND_STORAGE_KEY,
 } from "./constants.js";
+import { isDesktopTransparentStageEnabled } from "./desktop-stage-mode.js";
 
 const STAGE_BACKGROUND_TRANSFORM_SAVE_DELAY_MS = 160;
 
@@ -63,6 +64,10 @@ export function createStageBackgroundController(deps) {
     }
 
     function persistStageBackgroundKey(backgroundKey) {
+        if (isDesktopTransparentStageEnabled(DOM.stageElement)) {
+            return;
+        }
+
         writeString(
             STAGE_BACKGROUND_STORAGE_KEY,
             String(backgroundKey || "default"),
@@ -190,6 +195,10 @@ export function createStageBackgroundController(deps) {
     }
 
     function resolveInitialStageBackgroundKey(stageConfig) {
+        if (isDesktopTransparentStageEnabled(DOM.stageElement)) {
+            return stageConfig.default_background_key || "default";
+        }
+
         const savedKey = loadSavedStageBackgroundKey();
         if (findStageBackgroundOption(stageConfig, savedKey)) {
             return savedKey;
@@ -721,8 +730,27 @@ export function createStageBackgroundController(deps) {
 
         const loadToken = ++live2dState.stageBackgroundLoadToken;
         const hasCustomBackground = Boolean(backgroundOption && String(backgroundOption.url || "").trim());
+        const transparentDesktopStage = isDesktopTransparentStageEnabled(DOM.stageElement);
 
         try {
+            const sprite = ensureStageBackgroundSprite();
+
+            if (transparentDesktopStage && !hasCustomBackground) {
+                if (loadToken !== live2dState.stageBackgroundLoadToken) {
+                    return;
+                }
+
+                sprite.texture = window.PIXI.Texture.WHITE;
+                sprite.visible = false;
+                sprite.alpha = 0;
+                live2dState.currentBackgroundImageNaturalSize = null;
+                clearStageBackgroundTransformStyles();
+                applyStageEffectsToRuntime(
+                    live2dState.stageEffects || DEFAULT_STAGE_EFFECT_SETTINGS,
+                );
+                return;
+            }
+
             let texture;
             if (hasCustomBackground) {
                 const url = String(backgroundOption.url || "").trim().replace(/"/g, "%22");
@@ -735,7 +763,6 @@ export function createStageBackgroundController(deps) {
                 return;
             }
 
-            const sprite = ensureStageBackgroundSprite();
             sprite.texture = texture;
             sprite.visible = true;
             sprite.alpha = hasCustomBackground ? 0.98 : 1;

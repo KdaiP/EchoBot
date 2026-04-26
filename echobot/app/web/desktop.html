@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>EchoBot Desktop Pet</title>
+    <link rel="icon" href="/favicon.ico" type="image/svg+xml">
+    <link rel="stylesheet" href="/web/assets/styles/desktop.css">
+</head>
+<body data-desktop-transparent-stage="true">
+    <main
+        id="desktop-stage"
+        class="desktop-stage"
+        data-desktop-transparent-stage="true"
+        aria-label="EchoBot Desktop Pet"
+    >
+        <div
+            id="live2d-stage"
+            class="live2d-stage desktop-live2d-stage"
+            data-desktop-transparent-stage="true"
+        >
+            <div class="desktop-resize-corner desktop-resize-corner-top-left" data-desktop-resize-edge="top-left" aria-hidden="true"></div>
+            <div class="desktop-resize-corner desktop-resize-corner-top-right" data-desktop-resize-edge="top-right" aria-hidden="true"></div>
+            <div class="desktop-resize-corner desktop-resize-corner-bottom-left" data-desktop-resize-edge="bottom-left" aria-hidden="true"></div>
+            <div class="desktop-resize-corner desktop-resize-corner-bottom-right" data-desktop-resize-edge="bottom-right" aria-hidden="true"></div>
+            <div id="stage-background-image" class="stage-background-image" hidden></div>
+            <canvas id="live2d-canvas"></canvas>
+            <div id="stage-light-back" class="stage-light stage-light-back"></div>
+            <div id="stage-light-rim" class="stage-light stage-light-rim"></div>
+            <div id="stage-gradient" class="stage-gradient"></div>
+            <div id="stage-vignette" class="stage-vignette"></div>
+            <div id="stage-grain" class="stage-grain"></div>
+            <div id="stage-message" class="stage-message">正在加载 Live2D 模型…</div>
+
+            <section
+                class="desktop-toolbar"
+                aria-label="Desktop controls"
+                data-desktop-interactive="true"
+            >
+                <button
+                    id="desktop-web-button"
+                    class="desktop-tool-button"
+                    type="button"
+                    data-desktop-interactive="true"
+                    aria-label="打开控制面板"
+                    title="打开控制面板"
+                >
+                    <svg class="desktop-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                            d="M6.25 18.75h10.5a4 4 0 0 0 .57-7.96A5.75 5.75 0 0 0 6.6 8.95 3.85 3.85 0 0 0 6.25 18.75Z"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-linejoin="round"
+                            stroke-width="1.6"
+                        />
+                        <path
+                            d="M9.2 14.2c.88-1.2 2.24-1.8 4.1-1.8"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-width="1.6"
+                        />
+                    </svg>
+                </button>
+                <button
+                    id="desktop-voice-button"
+                    class="desktop-tool-button"
+                    type="button"
+                    data-desktop-interactive="true"
+                    aria-pressed="false"
+                    aria-label="语音服务"
+                    title="语音服务"
+                >
+                    <svg class="desktop-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                        <rect
+                            x="9"
+                            y="3.75"
+                            width="6"
+                            height="10.5"
+                            rx="3"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-width="1.6"
+                        />
+                        <path
+                            d="M6.75 10.75a5.25 5.25 0 0 0 10.5 0"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-width="1.6"
+                        />
+                        <path
+                            d="M12 16v4.25"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-width="1.6"
+                        />
+                        <path
+                            d="M9 20.25h6"
+                            fill="none"
+                            stroke="currentColor"
+                            stroke-linecap="round"
+                            stroke-width="1.6"
+                        />
+                    </svg>
+                </button>
+                <div
+                    class="desktop-drag-control"
+                    data-desktop-interactive="true"
+                    aria-label="拖动桌宠"
+                    title="拖动桌宠"
+                >
+                    <div
+                        id="desktop-drag-button"
+                        class="desktop-drag-target"
+                        data-desktop-interactive="true"
+                        aria-hidden="true"
+                    ></div>
+                    <div class="desktop-tool-button desktop-drag-visual" aria-hidden="true">
+                        <svg class="desktop-tool-icon" viewBox="0 0 24 24" aria-hidden="true">
+                            <path
+                                d="M7.2 11.6V6a1.45 1.45 0 1 1 2.9 0v4.8"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="1.6"
+                            />
+                            <path
+                                d="M10.1 10.6V4.9a1.45 1.45 0 1 1 2.9 0v5.7"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="1.6"
+                            />
+                            <path
+                                d="M13 10.3V4.9a1.45 1.45 0 1 1 2.9 0v5.9"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="1.6"
+                            />
+                            <path
+                                d="M15.9 10.9V6.5a1.45 1.45 0 1 1 2.9 0v7.2c0 3.2-2.6 5.8-5.8 5.8h-1.95a5.5 5.5 0 0 1-4.5-2.35L4.25 13.7a1.45 1.45 0 0 1 2.24-1.84l1.9 2.16V8.7a1.45 1.45 0 1 1 2.9 0"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-linecap="round"
+                                stroke-linejoin="round"
+                                stroke-width="1.6"
+                            />
+                        </svg>
+                    </div>
+                </div>
+            </section>
+        </div>
+    </main>
+
+    <form id="chat-form" class="desktop-hidden-shell" autocomplete="off">
+        <input id="prompt-input" type="text" name="prompt" value="">
+        <button id="send-button" type="submit">Send</button>
+    </form>
+
+    <section class="desktop-hidden-shell" aria-hidden="true">
+        <span id="connection-badge" class="status-badge status-idle">初始化中</span>
+        <span id="run-status">正在连接 EchoBot…</span>
+        <span id="session-label">会话: default</span>
+        <span id="desktop-voice-detail">语音待命</span>
+        <select id="tts-provider-select"></select>
+        <select id="voice-select"></select>
+        <div id="tts-detail"></div>
+        <select id="asr-provider-select"></select>
+        <div id="asr-detail"></div>
+        <label>
+            <input id="always-listen-checkbox" type="checkbox">
+            <span>Always listen</span>
+        </label>
+        <button id="record-button" type="button">Record</button>
+        <button id="reset-view-button" type="button">Reset View</button>
+        <button id="stop-audio-button" type="button" disabled>Stop Audio</button>
+        <select id="model-select"></select>
+        <div id="live2d-expression-list"></div>
+        <div id="live2d-motion-list"></div>
+        <div id="live2d-hotkey-list"></div>
+        <input id="live2d-hotkeys-checkbox" type="checkbox">
+        <input id="live2d-mouse-follow-checkbox" type="checkbox">
+        <div id="messages"></div>
+    </section>
+
+    <script src="/web/assets/vendor/pixi.min.js"></script>
+    <script src="/web/assets/vendor/live2dcubismcore.min.js"></script>
+    <script src="/web/assets/vendor/cubism4.min.js"></script>
+    <script type="module" src="/web/assets/desktop.js"></script>
+</body>
+</html>

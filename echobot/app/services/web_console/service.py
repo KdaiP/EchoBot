@@ -59,7 +59,10 @@ class WebConsoleService:
         route_mode: str,
         runtime_config: dict[str, Any],
     ) -> dict[str, Any]:
-        live2d = await self._live2d_service.build_config()
+        settings = await self._runtime_settings_service.load_settings()
+        live2d = await self._live2d_service.build_config(
+            selected_selection_key=settings.selected_live2d_model,
+        )
         stage = await self._stage_background_service.build_config()
         return {
             "session_name": session_name,
@@ -133,6 +136,17 @@ class WebConsoleService:
             shortcut_tokens=shortcut_tokens,
             restore_default=restore_default,
         )
+
+    async def save_selected_live2d_model(
+        self,
+        *,
+        selection_key: str,
+    ) -> dict[str, Any]:
+        payload = await self._live2d_service.save_selection(selection_key)
+        await self._runtime_settings_service.save_selected_live2d_model(
+            payload["selection_key"],
+        )
+        return payload
 
     def resolve_stage_background_asset(self, asset_path: str) -> Path:
         return self._stage_background_service.resolve_asset(asset_path)
