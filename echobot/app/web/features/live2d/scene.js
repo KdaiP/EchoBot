@@ -491,6 +491,8 @@ export function createLive2DSceneController(deps) {
             autoStart: true,
             antialias: true,
             backgroundAlpha: 0,
+            resolution: window.devicePixelRatio || 1,
+            autoDensity: true,
         });
         live2dState.live2dStage = live2dState.pixiApp.stage;
         live2dState.live2dStage.interactive = true;
