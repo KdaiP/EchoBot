@@ -9,8 +9,7 @@ description: >
   sports, and entertainment. Always use this skill for news-related requests, even
   if the user doesn't say the word "news" explicitly.
 metadata:
-  echo:
-    emoji: 📰
+  echo: '{"emoji": "📰"}'
 ---
 
 # News
