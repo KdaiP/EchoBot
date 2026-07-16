@@ -124,10 +124,14 @@ class Live2DModelCatalog:
         return f"{candidate.source}:{candidate.model_relative_path.as_posix()}"
 
     def asset_url_for(self, candidate: Live2DModelCandidate, relative_path: str) -> str:
-        return (
-            f"/api/web/live2d/{candidate.source}/"
-            f"{quote(str(relative_path or '').replace('\\', '/'), safe='/')}"
-        )
+        clean_path = str(relative_path or "").replace("\\", "/")
+        encoded_path = quote(clean_path, safe="/")
+        return f"/api/web/live2d/{candidate.source}/{encoded_path}"
+        # Python 硬性规则：f-string 大括号里面不能出现任何字符串字面量包含反斜杠 \，'\\' 里面有 \，直接触发 SyntaxError: f-string expression part cannot include a backslash
+        # return (
+        #     f"/api/web/live2d/{candidate.source}/"
+        #     f"{quote(str(relative_path or '').replace('\\', '/'), safe='/')}"
+        # )
 
     def directory_name_for(self, candidate: Live2DModelCandidate) -> str:
         runtime_relative_path = candidate.runtime_relative_path
