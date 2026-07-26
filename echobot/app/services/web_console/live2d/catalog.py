@@ -124,10 +124,9 @@ class Live2DModelCatalog:
         return f"{candidate.source}:{candidate.model_relative_path.as_posix()}"
 
     def asset_url_for(self, candidate: Live2DModelCandidate, relative_path: str) -> str:
-        return (
-            f"/api/web/live2d/{candidate.source}/"
-            f"{quote(str(relative_path or '').replace('\\', '/'), safe='/')}"
-        )
+        path_raw = str(relative_path or "").replace("\\", "/")
+        encoded_path = quote(path_raw, safe="/")
+        return f"/api/web/live2d/{candidate.source}/{encoded_path}"
 
     def directory_name_for(self, candidate: Live2DModelCandidate) -> str:
         runtime_relative_path = candidate.runtime_relative_path
