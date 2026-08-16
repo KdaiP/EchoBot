@@ -100,7 +100,7 @@ class RoleService:
 
     def _reset_deleted_role_sessions_sync(self, deleted_role_name: str) -> None:
         for session_info in self._session_store.list_sessions():
-            session = self._session_store.load_session(session_info.name)
+            session = self._session_store.load_session(session_info.id)
             active_role_name = role_name_from_metadata(session.metadata)
             if active_role_name != deleted_role_name:
                 continue

@@ -7,7 +7,6 @@ from ..channels.types import ChannelAddress
 from .parsing import split_command_parts
 
 if TYPE_CHECKING:
-    from ..gateway.route_sessions import RouteSessionSummary
     from ..gateway.session_service import GatewaySessionService
 
 
@@ -69,45 +68,45 @@ async def execute_route_session_command(
     command: RouteSessionCommand,
 ) -> str:
     if command.action == "help":
-        current = await session_service.current_route_session(route_key)
+        current = await session_service.current_routed_session(route_key)
         await _remember_route_target(
             session_service,
-            current.session_name,
+            current.session_id,
             address,
             metadata,
         )
         return format_route_session_help()
 
     if command.action == "list":
-        sessions = await session_service.list_route_sessions(route_key)
+        sessions = await session_service.list_routed_sessions(route_key)
         if not sessions:
             return "No sessions are available for this chat."
         await _remember_route_target(
             session_service,
-            sessions[0].session_name,
+            sessions[0].session_id,
             address,
             metadata,
         )
         return format_route_session_list(sessions)
 
     if command.action == "current":
-        current = await session_service.current_route_session(route_key)
+        current = await session_service.current_routed_session(route_key)
         await _remember_route_target(
             session_service,
-            current.session_name,
+            current.session_id,
             address,
             metadata,
         )
         return format_current_route_session(current)
 
     if command.action == "new":
-        created = await session_service.create_route_session(
+        created = await session_service.create_routed_session(
             route_key,
             title=(command.argument or None),
         )
         await _remember_route_target(
             session_service,
-            created.session_name,
+            created.session_id,
             address,
             metadata,
         )
@@ -121,7 +120,7 @@ async def execute_route_session_command(
         except ValueError:
             return "Session number must be an integer."
         try:
-            selected = await session_service.switch_route_session(
+            selected = await session_service.switch_routed_session(
                 route_key,
                 index,
             )
@@ -129,7 +128,7 @@ async def execute_route_session_command(
             return str(exc)
         await _remember_route_target(
             session_service,
-            selected.session_name,
+            selected.session_id,
             address,
             metadata,
         )
@@ -139,7 +138,7 @@ async def execute_route_session_command(
         if not command.argument:
             return "Usage: /rename <title>"
         try:
-            renamed = await session_service.rename_current_route_session(
+            renamed = await session_service.rename_current_routed_session(
                 route_key,
                 command.argument,
             )
@@ -147,7 +146,7 @@ async def execute_route_session_command(
             return str(exc)
         await _remember_route_target(
             session_service,
-            renamed.session_name,
+            renamed.session_id,
             address,
             metadata,
         )
@@ -157,10 +156,10 @@ async def execute_route_session_command(
         )
 
     if command.action == "delete":
-        result = await session_service.delete_current_route_session(route_key)
+        result = await session_service.delete_current_routed_session(route_key)
         await _remember_route_target(
             session_service,
-            result.current.session_name,
+            result.current.session_id,
             address,
             metadata,
         )
@@ -211,12 +210,12 @@ def format_route_session_list(sessions: list[RouteSessionLike]) -> str:
 
 async def _remember_route_target(
     session_service: "GatewaySessionService",
-    session_name: str,
+    session_id: str,
     address: ChannelAddress,
     metadata: dict[str, object],
 ) -> None:
     await session_service.remember_delivery_target(
-        session_name,
+        session_id,
         address,
         metadata,
     )

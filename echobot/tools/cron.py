@@ -61,9 +61,9 @@ class CronTool(BaseTool):
                 "type": "string",
                 "description": "Job id for remove/run/enable/disable.",
             },
-            "session_name": {
+            "session_id": {
                 "type": "string",
-                "description": "Session name used by the scheduled run.",
+                "description": "Stable session ID used by the scheduled run.",
             },
             "include_disabled": {
                 "type": "boolean",
@@ -78,11 +78,11 @@ class CronTool(BaseTool):
         self,
         cron_service: CronService,
         *,
-        session_name: str,
+        session_id: str,
         allow_mutations: bool = True,
     ) -> None:
         self._cron_service = cron_service
-        self._session_name = session_name
+        self._session_id = session_id
         self._allow_mutations = allow_mutations
 
     async def run(self, arguments: dict[str, Any]) -> ToolOutput:
@@ -109,7 +109,7 @@ class CronTool(BaseTool):
         schedule = self._build_schedule(arguments)
         task_type = str(arguments.get("task_type", "agent")).strip().lower() or "agent"
         name = str(arguments.get("name", "")).strip() or _default_job_name(content)
-        session_name = str(arguments.get("session_name", "")).strip() or self._session_name
+        session_id = str(arguments.get("session_id", "")).strip() or self._session_id
         delete_after_run = schedule.kind == "at"
         job = await self._cron_service.add_job(
             name=name,
@@ -117,7 +117,7 @@ class CronTool(BaseTool):
             payload=CronPayload(
                 kind=task_type,  # type: ignore[arg-type]
                 content=content,
-                session_name=session_name,
+                session_id=session_id,
             ),
             delete_after_run=delete_after_run,
         )

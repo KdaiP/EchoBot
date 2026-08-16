@@ -35,9 +35,7 @@ export function createLive2DConfigController(deps) {
     } = deps;
 
     function applyConfigToUI(config) {
-        const rememberedSessionName = String(
-            window.localStorage.getItem("echobot.web.session") || config.session_name,
-        ).trim() || config.session_name;
+        const sessionTitle = String(config.session_title || "未命名会话").trim();
         const live2dModelOptions = resolveLive2DModelOptions(config.live2d);
         const currentLive2DConfig = resolveInitialLive2DConfig(config.live2d, live2dModelOptions);
         const stageConfig = buildStageConfig(config.stage);
@@ -57,7 +55,7 @@ export function createLive2DConfigController(deps) {
             DOM.live2dMouseFollowCheckbox.checked = live2dState.live2dMouseFollowEnabled;
         }
 
-        DOM.sessionLabel.textContent = `会话: ${rememberedSessionName}`;
+        DOM.sessionLabel.textContent = `会话: ${sessionTitle}`;
         renderLive2DModelOptions(live2dModelOptions, currentLive2DConfig.selection_key);
         renderLive2DControls(currentLive2DConfig);
         renderStageBackgroundOptions(stageConfig, stageBackgroundKey);

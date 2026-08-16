@@ -278,6 +278,19 @@
                 </summary>
                 <div class="settings-panel-body">
                     <div class="field-grid">
+                        <div class="field">
+                            <span>LLM Provider / 模型</span>
+                            <div class="llm-provider-select-row">
+                                <select id="llm-provider-select"></select>
+                                <button
+                                    id="llm-provider-manage-button"
+                                    class="ghost-button ghost-button-compact"
+                                    type="button"
+                                >
+                                    管理
+                                </button>
+                            </div>
+                        </div>
                         <label class="field">
                             <span>TTS 语音合成模型</span>
                             <select id="tts-provider-select"></select>
@@ -907,6 +920,120 @@
             <p class="window-file-drop-text">图片会作为图片附件，其余文件会作为文件附件</p>
         </div>
     </div>
+
+    <dialog id="llm-provider-dialog" class="llm-provider-dialog">
+        <div class="llm-provider-dialog-shell">
+            <header class="llm-provider-dialog-header">
+                <div>
+                    <p class="section-title">LLM Provider 管理</p>
+                    <p class="muted-text">密钥只写保存，页面不会读取或显示明文。</p>
+                </div>
+                <button
+                    id="llm-provider-dialog-close"
+                    class="ghost-button ghost-button-compact"
+                    type="button"
+                >关闭</button>
+            </header>
+
+            <div class="llm-provider-toolbar">
+                <label class="field llm-provider-picker">
+                    <span>已配置项</span>
+                    <select id="llm-provider-editor-select"></select>
+                </label>
+                <button id="llm-provider-new-button" class="ghost-button" type="button">新增</button>
+                <button
+                    id="llm-provider-delete-button"
+                    class="ghost-button ghost-button-danger"
+                    type="button"
+                >删除</button>
+            </div>
+
+            <form id="llm-provider-form" class="llm-provider-form">
+                <div class="field-grid">
+                    <label class="field">
+                        <span>预设</span>
+                        <select id="llm-provider-preset-select">
+                            <option value="custom">自定义 OpenAI 兼容服务</option>
+                            <option value="openai">OpenAI</option>
+                            <option value="deepseek">DeepSeek</option>
+                            <option value="dashscope">阿里云百炼 / DashScope</option>
+                            <option value="openrouter">OpenRouter</option>
+                            <option value="ollama">Ollama（本地）</option>
+                        </select>
+                    </label>
+                    <label class="field">
+                        <span>名称（可选）</span>
+                        <input
+                            id="llm-provider-label-input"
+                            autocomplete="off"
+                            placeholder="留空时使用模型名"
+                        >
+                    </label>
+                    <label class="field">
+                        <span>模型</span>
+                        <input
+                            id="llm-provider-model-input"
+                            list="llm-provider-model-options"
+                            autocomplete="off"
+                            required
+                        >
+                        <datalist id="llm-provider-model-options"></datalist>
+                    </label>
+                    <label class="field field-span-full">
+                        <span>Base URL</span>
+                        <input id="llm-provider-base-url-input" type="url" required>
+                    </label>
+                    <label class="field field-span-full">
+                        <span>API Key</span>
+                        <input
+                            id="llm-provider-api-key-input"
+                            type="password"
+                            autocomplete="new-password"
+                            placeholder="留空表示保留已保存的密钥；本地服务可以为空"
+                        >
+                        <small id="llm-provider-api-key-status" class="muted-text"></small>
+                    </label>
+                    <label class="toggle-item field-span-full">
+                        <input id="llm-provider-clear-api-key-checkbox" type="checkbox">
+                        <span>删除已经保存的 API Key</span>
+                    </label>
+                    <label class="field">
+                        <span>超时（秒）</span>
+                        <input id="llm-provider-timeout-input" type="number" min="1" step="1" value="60">
+                    </label>
+                    <label class="field">
+                        <span>最大重试次数</span>
+                        <input id="llm-provider-max-retries-input" type="number" min="0" step="1" value="2">
+                    </label>
+                    <label class="toggle-item field-span-full">
+                        <input id="llm-provider-image-checkbox" type="checkbox" checked>
+                        <span>模型支持图片输入</span>
+                    </label>
+                    <details class="llm-provider-advanced field-span-full">
+                        <summary>高级参数</summary>
+                        <div class="field-grid">
+                            <label class="field field-span-full">
+                                <span>Extra Headers（JSON，不允许存放认证 Header）</span>
+                                <textarea id="llm-provider-extra-headers-input" rows="4">{}</textarea>
+                            </label>
+                            <label class="field field-span-full">
+                                <span>Extra Body（JSON）</span>
+                                <textarea id="llm-provider-extra-body-input" rows="5">{}</textarea>
+                            </label>
+                        </div>
+                    </details>
+                </div>
+            </form>
+
+            <div id="llm-provider-dialog-status" class="llm-provider-dialog-status muted-text"></div>
+            <footer class="llm-provider-dialog-actions">
+                <button id="llm-provider-test-button" class="ghost-button" type="button">测试连接</button>
+                <button id="llm-provider-discover-button" class="ghost-button" type="button">获取模型</button>
+                <span class="llm-provider-action-spacer"></span>
+                <button id="llm-provider-use-button" class="primary-button" type="button">使用</button>
+            </footer>
+        </div>
+    </dialog>
 
     <dialog
         id="message-image-dialog"

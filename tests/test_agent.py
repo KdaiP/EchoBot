@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from echobot.agent import AgentCore, AgentRunResult
+from echobot.agent import AgentCore, AgentRequest
 from echobot import build_default_system_prompt
 from echobot.config import load_env_file
 from echobot.memory import (
@@ -18,15 +18,9 @@ from echobot.memory import (
     _agentscope_messages_to_llm,
     _llm_messages_to_agentscope,
 )
-from echobot.models import LLMMessage, LLMResponse, LLMTool, LLMUsage, ToolCall
+from echobot.models import LLMMessage, LLMResponse, LLMTool, ToolCall
 from echobot.providers.base import LLMProvider
-from echobot.providers.openai_compatible import (
-    OpenAICompatibleProvider,
-    OpenAICompatibleSettings,
-)
-from echobot.runtime.session_runner import SessionAgentRunner
-from echobot.runtime.sessions import SessionStore
-from echobot.runtime.turns import run_agent_turn
+from echobot.providers.openai_compatible import OpenAICompatibleSettings
 from echobot.skill_support import SkillRegistry
 from echobot.tools import BaseTool, ToolExecutionOutput, ToolRegistry
 
@@ -348,82 +342,35 @@ class FakeUserInputToolProvider(LLMProvider):
         )
 
 
-class MaxStepsRecordingAgent(AgentCore):
-    def __init__(self) -> None:
-        super().__init__(FakeProvider())
-        self.max_steps_seen: int | None = None
-
-    async def ask_with_tools(
-        self,
-        user_input: str,
-        *,
-        tool_registry: ToolRegistry,
-        image_urls=None,
-        file_attachments=None,
-        history=None,
-        compressed_summary: str = "",
-        tool_choice=None,
-        extra_system_messages=None,
-        transient_system_messages=None,
-        temperature=None,
-        max_tokens=None,
-        max_steps: int = 50,
-        trace_callback=None,
-    ) -> AgentRunResult:
-        del (
-            tool_registry,
-            image_urls,
-            file_attachments,
-            history,
-            tool_choice,
-            extra_system_messages,
-            transient_system_messages,
-            temperature,
-            max_tokens,
-            trace_callback,
-        )
-        self.max_steps_seen = max_steps
-        user_message = LLMMessage(role="user", content=user_input)
-        response = LLMResponse(
-            message=LLMMessage(role="assistant", content="ok"),
-            model="fake-model",
-        )
-        return AgentRunResult(
-            response=response,
-            new_messages=[user_message, response.message],
-            history=[user_message, response.message],
-            steps=1,
-            compressed_summary=compressed_summary,
-        )
-
-
 class AgentCoreTests(unittest.IsolatedAsyncioTestCase):
-    async def test_ask_reuses_same_core_message_building(self) -> None:
+    async def test_run_builds_one_standard_request_context(self) -> None:
         provider = FakeProvider()
         agent = AgentCore(provider, system_prompt="You are helpful.")
         history = [LLMMessage(role="assistant", content="hello")]
 
-        response = await agent.ask("world", history=history)
+        result = await agent.run(AgentRequest(prompt="world", history=history))
 
-        self.assertEqual("ok", response.message.content)
+        self.assertEqual("ok", result.response.message.content)
         self.assertEqual(3, len(provider.last_messages))
         self.assertEqual("system", provider.last_messages[0].role)
         self.assertEqual("assistant", provider.last_messages[1].role)
         self.assertEqual("user", provider.last_messages[2].role)
 
-    async def test_ask_supports_text_and_image_user_content(self) -> None:
+    async def test_run_supports_text_and_image_user_content(self) -> None:
         provider = FakeProvider()
         agent = AgentCore(provider, system_prompt="You are helpful.")
 
-        await agent.ask(
-            "describe this",
-            image_urls=[
+        await agent.run(
+            AgentRequest(
+                prompt="describe this",
+                image_urls=[
                 {
                     "attachment_id": "img_demo",
                     "url": "attachment://img_demo",
                     "preview_url": "/api/attachments/img_demo/content",
                 }
-            ],
+                ],
+            )
         )
 
         user_message = provider.last_messages[-1]
@@ -441,7 +388,7 @@ class AgentCoreTests(unittest.IsolatedAsyncioTestCase):
             user_message.content[1]["image_url"]["preview_url"],
         )
 
-    async def test_ask_with_memory_uses_compacted_history_and_summary(self) -> None:
+    async def test_run_uses_compacted_history_and_summary(self) -> None:
         provider = FakeProvider()
         memory_support = FakeMemorySupport()
         agent = AgentCore(
@@ -454,7 +401,7 @@ class AgentCoreTests(unittest.IsolatedAsyncioTestCase):
             LLMMessage(role="assistant", content="second"),
         ]
 
-        result = await agent.ask_with_memory("world", history=history)
+        result = await agent.run(AgentRequest(prompt="world", history=history))
 
         self.assertEqual("ok", result.response.message.content)
         self.assertEqual("summary-1", result.compressed_summary)
@@ -469,16 +416,18 @@ class AgentCoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("world", memory_support.remembered_messages[0].content)
         self.assertEqual("ok", memory_support.remembered_messages[1].content)
 
-    async def test_ask_with_tools_compacts_before_each_model_call(self) -> None:
+    async def test_run_compacts_before_each_model_call(self) -> None:
         provider = FakeToolProvider()
         memory_support = FakeMemorySupport()
         agent = AgentCore(provider, memory_support=memory_support)
         registry = ToolRegistry([EchoTool()])
 
-        result = await agent.ask_with_tools(
-            "test",
-            tool_registry=registry,
-            history=[LLMMessage(role="assistant", content="older")],
+        result = await agent.run(
+            AgentRequest(
+                prompt="test",
+                tool_registry=registry,
+                history=[LLMMessage(role="assistant", content="older")],
+            )
         )
 
         self.assertEqual("done", result.response.message.content)
@@ -487,15 +436,17 @@ class AgentCoreTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("test", memory_support.remembered_messages[0].content)
         self.assertEqual("done", memory_support.remembered_messages[-1].content)
 
-    async def test_ask_places_transient_system_messages_before_history(self) -> None:
+    async def test_run_places_transient_system_messages_before_history(self) -> None:
         provider = FakeProvider()
         agent = AgentCore(provider, system_prompt="You are helpful.")
         history = [LLMMessage(role="assistant", content="older")]
 
-        await agent.ask(
-            "world",
-            history=history,
-            transient_system_messages=["handoff"],
+        await agent.run(
+            AgentRequest(
+                prompt="world",
+                history=history,
+                transient_system_messages=["handoff"],
+            )
         )
 
         self.assertEqual(
@@ -504,16 +455,18 @@ class AgentCoreTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual("handoff", provider.last_messages[1].content)
 
-    async def test_ask_with_tools_reuses_transient_system_messages_during_tool_loop(self) -> None:
+    async def test_run_reuses_transient_system_messages_during_tool_loop(self) -> None:
         provider = FakeToolProvider()
         agent = AgentCore(provider)
         registry = ToolRegistry([EchoTool()])
 
-        await agent.ask_with_tools(
-            "test",
-            tool_registry=registry,
-            history=[LLMMessage(role="assistant", content="older")],
-            transient_system_messages=["handoff"],
+        await agent.run(
+            AgentRequest(
+                prompt="test",
+                tool_registry=registry,
+                history=[LLMMessage(role="assistant", content="older")],
+                transient_system_messages=["handoff"],
+            )
         )
 
         self.assertEqual(2, len(provider.seen_messages))
@@ -531,12 +484,14 @@ class AgentCoreTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual("handoff", second_call[0].content)
 
-    async def test_ask_with_tools_promotes_tool_images_into_next_user_message(self) -> None:
+    async def test_run_promotes_tool_images_into_next_user_message(self) -> None:
         provider = FakeImageToolProvider()
         agent = AgentCore(provider)
         registry = ToolRegistry([ImageEchoTool()])
 
-        result = await agent.ask_with_tools("inspect this", tool_registry=registry)
+        result = await agent.run(
+            AgentRequest(prompt="inspect this", tool_registry=registry)
+        )
 
         self.assertEqual("done", result.response.message.content)
         self.assertEqual(2, provider.calls)
@@ -559,12 +514,14 @@ class AgentCoreTests(unittest.IsolatedAsyncioTestCase):
             promoted_user_message.content[1]["image_url"]["preview_url"],
         )
 
-    async def test_ask_with_tools_collects_outbound_content_blocks(self) -> None:
+    async def test_run_collects_outbound_content_blocks(self) -> None:
         provider = FakeUserFileToolProvider()
         agent = AgentCore(provider)
         registry = ToolRegistry([UserFileTool()])
 
-        result = await agent.ask_with_tools("send the file", tool_registry=registry)
+        result = await agent.run(
+            AgentRequest(prompt="send the file", tool_registry=registry)
+        )
 
         self.assertEqual("done", result.response.message.content)
         self.assertEqual(1, len(result.outbound_content_blocks))
@@ -574,16 +531,18 @@ class AgentCoreTests(unittest.IsolatedAsyncioTestCase):
             result.outbound_content_blocks[0]["file_attachment"]["name"],
         )
 
-    async def test_ask_with_skills_preserves_outbound_content_blocks_from_tools(self) -> None:
+    async def test_run_combines_skills_and_regular_tools(self) -> None:
         provider = FakeUserFileToolProvider()
         agent = AgentCore(provider)
         skill_registry = SkillRegistry()
         tool_registry = ToolRegistry([UserFileTool()])
 
-        result = await agent.ask_with_skills(
-            "send the file",
-            skill_registry=skill_registry,
-            tool_registry=tool_registry,
+        result = await agent.run(
+            AgentRequest(
+                prompt="send the file",
+                skill_registry=skill_registry,
+                tool_registry=tool_registry,
+            )
         )
 
         self.assertEqual("done", result.response.message.content)
@@ -601,9 +560,11 @@ class AgentCoreTests(unittest.IsolatedAsyncioTestCase):
         agent = AgentCore(provider)
         registry = ToolRegistry([RequestUserInputTool()])
 
-        result = await agent.ask_with_tools(
-            "帮我继续改代码",
-            tool_registry=registry,
+        result = await agent.run(
+            AgentRequest(
+                prompt="帮我继续改代码",
+                tool_registry=registry,
+            )
         )
 
         self.assertEqual(1, provider.calls)
@@ -613,43 +574,6 @@ class AgentCoreTests(unittest.IsolatedAsyncioTestCase):
             result.pending_user_input["prompt"],
         )
         self.assertIn("请确认要修改哪个文件。", result.response.message.content)
-
-
-class RunAgentTurnTests(unittest.IsolatedAsyncioTestCase):
-    async def test_run_agent_turn_uses_default_max_steps_of_50(self) -> None:
-        agent = MaxStepsRecordingAgent()
-
-        result = await run_agent_turn(
-            agent,
-            "hello",
-            [],
-            compressed_summary="",
-            skill_registry=None,
-            tool_registry=ToolRegistry(),
-            temperature=None,
-            max_tokens=None,
-        )
-
-        self.assertEqual("ok", result.response.message.content)
-        self.assertEqual(50, agent.max_steps_seen)
-
-
-class SessionAgentRunnerTests(unittest.IsolatedAsyncioTestCase):
-    async def test_run_prompt_uses_configured_default_max_steps(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            session_store = SessionStore(Path(temp_dir) / "sessions")
-            agent = MaxStepsRecordingAgent()
-            runner = SessionAgentRunner(
-                agent,
-                session_store,
-                tool_registry_factory=lambda *_args: ToolRegistry(),
-                default_max_steps=77,
-            )
-
-            await runner.run_prompt("demo", "hello")
-
-            self.assertEqual(77, agent.max_steps_seen)
-
 
 class SystemPromptTests(unittest.TestCase):
     def test_build_default_system_prompt_includes_environment_workspace_and_agents(self) -> None:
@@ -942,245 +866,6 @@ class ReMeLightMessageConversionTests(unittest.TestCase):
             "I need to search memory first.",
             round_tripped[0].reasoning_content,
         )
-
-
-class OpenAICompatibleProviderTests(unittest.TestCase):
-    def setUp(self) -> None:
-        settings = OpenAICompatibleSettings(
-            api_key="test-key",
-            model="test-model",
-            base_url="https://example.com/v1",
-        )
-        self.provider = OpenAICompatibleProvider(settings)
-
-    def test_build_payload_keeps_optional_fields_simple(self) -> None:
-        payload = self.provider._build_payload(
-            messages=[LLMMessage(role="user", content="hi")],
-            tools=[
-                LLMTool(
-                    name="search_weather",
-                    description="Search weather",
-                    parameters={"type": "object", "properties": {}},
-                )
-            ],
-            tool_choice="auto",
-            temperature=0.3,
-            max_tokens=200,
-        )
-
-        self.assertEqual("test-model", payload["model"])
-        self.assertEqual("hi", payload["messages"][0]["content"])
-        self.assertEqual("search_weather", payload["tools"][0]["function"]["name"])
-        self.assertEqual("auto", payload["tool_choice"])
-        self.assertEqual(0.3, payload["temperature"])
-        self.assertEqual(200, payload["max_tokens"])
-
-    def test_parse_response_supports_tool_calls(self) -> None:
-        response = self.provider._parse_response(
-            {
-                "model": "test-model",
-                "choices": [
-                    {
-                        "finish_reason": "tool_calls",
-                        "message": {
-                            "role": "assistant",
-                            "content": "",
-                            "reasoning_content": "Need current weather before answering.",
-                            "tool_calls": [
-                                {
-                                    "id": "call_1",
-                                    "function": {
-                                        "name": "search_weather",
-                                        "arguments": '{"city":"Shanghai"}',
-                                    },
-                                }
-                            ],
-                        },
-                    }
-                ],
-                "usage": {
-                    "prompt_tokens": 10,
-                    "completion_tokens": 5,
-                    "total_tokens": 15,
-                    "prompt_cache_hit_tokens": 6,
-                    "prompt_cache_miss_tokens": 4,
-                },
-            }
-        )
-
-        self.assertEqual("assistant", response.message.role)
-        self.assertEqual("tool_calls", response.finish_reason)
-        self.assertEqual(
-            "Need current weather before answering.",
-            response.reasoning_content,
-        )
-        self.assertEqual(1, len(response.tool_calls))
-        self.assertEqual("search_weather", response.tool_calls[0].name)
-        self.assertEqual(15, response.usage.total_tokens)
-        self.assertEqual(6, response.usage.prompt_cache_hit_tokens)
-        self.assertEqual(4, response.usage.prompt_cache_miss_tokens)
-
-    def test_build_payload_passes_assistant_reasoning_content_back(self) -> None:
-        payload = self.provider._build_payload(
-            messages=[
-                LLMMessage(role="user", content="weather"),
-                LLMMessage(
-                    role="assistant",
-                    content="",
-                    reasoning_content="Need to activate the weather skill.",
-                    tool_calls=[
-                        ToolCall(
-                            id="call_1",
-                            name="activate_skill",
-                            arguments='{"name":"weather"}',
-                        )
-                    ],
-                ),
-                LLMMessage(
-                    role="tool",
-                    content='{"ok":true}',
-                    tool_call_id="call_1",
-                ),
-            ],
-            tools=None,
-            tool_choice=None,
-            temperature=None,
-            max_tokens=None,
-        )
-
-        assistant_payload = payload["messages"][1]
-        self.assertEqual(
-            "Need to activate the weather skill.",
-            assistant_payload["reasoning_content"],
-        )
-        self.assertEqual("call_1", assistant_payload["tool_calls"][0]["id"])
-
-    def test_parse_response_extracts_think_tags_from_content(self) -> None:
-        response = self.provider._parse_response(
-            {
-                "model": "test-model",
-                "choices": [
-                    {
-                        "finish_reason": "stop",
-                        "message": {
-                            "role": "assistant",
-                            "content": "<think>hidden reasoning</think>\nfinal answer",
-                        },
-                    }
-                ],
-            }
-        )
-
-        self.assertEqual("hidden reasoning", response.reasoning_content)
-        self.assertEqual("final answer", response.message.content)
-
-    def test_llm_usage_to_dict_keeps_cache_metrics(self) -> None:
-        usage = LLMUsage(
-            prompt_tokens=10,
-            completion_tokens=5,
-            total_tokens=15,
-            prompt_cache_hit_tokens=6,
-            prompt_cache_miss_tokens=4,
-        )
-
-        self.assertEqual(
-            {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "total_tokens": 15,
-                "prompt_cache_hit_tokens": 6,
-                "prompt_cache_miss_tokens": 4,
-                "prompt_cache_hit_rate_percent": 60.0,
-            },
-            usage.to_dict(),
-        )
-
-    def test_llm_usage_hit_rate_percent_handles_zero_prompt_tokens(self) -> None:
-        usage = LLMUsage()
-
-        self.assertIsNone(usage.prompt_cache_hit_rate_percent())
-
-    def test_llm_usage_from_openai_prompt_tokens_details(self) -> None:
-        usage = LLMUsage.from_dict(
-            {
-                "prompt_tokens": 10,
-                "completion_tokens": 5,
-                "total_tokens": 15,
-                "prompt_tokens_details": {
-                    "cached_tokens": 6,
-                },
-            }
-        )
-
-        self.assertEqual(10, usage.prompt_tokens)
-        self.assertEqual(5, usage.completion_tokens)
-        self.assertEqual(15, usage.total_tokens)
-        self.assertEqual(6, usage.prompt_cache_hit_tokens)
-        self.assertEqual(4, usage.prompt_cache_miss_tokens)
-        self.assertEqual(60.0, usage.prompt_cache_hit_rate_percent())
-
-    def test_llm_usage_from_input_output_tokens_and_cached_tokens(self) -> None:
-        usage = LLMUsage.from_dict(
-            {
-                "input_tokens": 12,
-                "output_tokens": 3,
-                "input_tokens_details": {
-                    "cached_tokens": 8,
-                },
-            }
-        )
-
-        self.assertEqual(12, usage.prompt_tokens)
-        self.assertEqual(3, usage.completion_tokens)
-        self.assertEqual(15, usage.total_tokens)
-        self.assertEqual(8, usage.prompt_cache_hit_tokens)
-        self.assertEqual(4, usage.prompt_cache_miss_tokens)
-        self.assertEqual(66.67, usage.prompt_cache_hit_rate_percent())
-
-    def test_parse_stream_chunk_returns_delta_content(self) -> None:
-        chunk = self.provider._parse_stream_chunk(
-            '{"choices":[{"delta":{"content":"hello"}}]}'
-        )
-
-        self.assertEqual("hello", chunk)
-
-    def test_parse_stream_chunk_ignores_non_content_events(self) -> None:
-        chunk = self.provider._parse_stream_chunk(
-            '{"choices":[{"delta":{"role":"assistant"},"finish_reason":null}]}'
-        )
-
-        self.assertEqual("", chunk)
-
-
-class OpenAICompatibleSettingsTests(unittest.TestCase):
-    def test_from_env_reads_required_values(self) -> None:
-        settings = OpenAICompatibleSettings.from_env(
-            env={
-                "LLM_API_KEY": "test-key",
-                "LLM_MODEL": "test-model",
-                "LLM_BASE_URL": "https://example.com/v1",
-                "LLM_TIMEOUT": "30",
-            }
-        )
-
-        self.assertEqual("test-key", settings.api_key)
-        self.assertEqual("test-model", settings.model)
-        self.assertEqual("https://example.com/v1", settings.base_url)
-        self.assertEqual(30.0, settings.timeout)
-
-    def test_from_env_requires_api_key_and_model(self) -> None:
-        with self.assertRaisesRegex(ValueError, "LLM_API_KEY"):
-            OpenAICompatibleSettings.from_env(env={"LLM_MODEL": "test-model"})
-
-    def test_from_env_validates_timeout(self) -> None:
-        with self.assertRaisesRegex(ValueError, "LLM_TIMEOUT"):
-            OpenAICompatibleSettings.from_env(
-                env={
-                    "LLM_API_KEY": "test-key",
-                    "LLM_MODEL": "test-model",
-                    "LLM_TIMEOUT": "not-a-number",
-                }
-            )
 
 
 class LoadEnvFileTests(unittest.TestCase):

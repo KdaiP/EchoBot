@@ -353,7 +353,7 @@ export function createComposerAttachmentsController(deps) {
     }
 
     function isComposerLocked() {
-        return chatState.chatBusy || Boolean(chatState.activeChatJobId);
+        return chatState.chatBusy || Boolean(chatState.activeAgentRunId);
     }
 
     function canAcceptFileDrop() {
@@ -578,7 +578,7 @@ function renderComposerFiles() {
         removeButton.dataset.composerFileId = file.id;
         removeButton.textContent = "移除";
         removeButton.title = "移除文件";
-        removeButton.disabled = chatState.chatBusy || Boolean(chatState.activeChatJobId);
+        removeButton.disabled = chatState.chatBusy || Boolean(chatState.activeAgentRunId);
         card.appendChild(removeButton);
 
         DOM.composerFiles.appendChild(card);
@@ -637,7 +637,7 @@ function renderComposerImages() {
         removeButton.dataset.composerImageId = image.id;
         removeButton.textContent = "×";
         removeButton.title = "移除图片";
-        removeButton.disabled = chatState.chatBusy || Boolean(chatState.activeChatJobId);
+        removeButton.disabled = chatState.chatBusy || Boolean(chatState.activeAgentRunId);
         card.appendChild(removeButton);
 
         DOM.composerImages.appendChild(card);

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable
+from dataclasses import asdict
 from pathlib import Path
 
 from ..asr import ASRService, build_default_asr_service
@@ -10,8 +12,10 @@ from ..gateway import (
     DeliveryStore,
     GatewayRuntime,
     GatewaySessionService,
-    RouteSessionStore,
+    RouteBindingStore,
 )
+from ..models import LLMMessage
+from ..providers import OpenAICompatibleProvider
 from ..runtime.bootstrap import RuntimeContext, RuntimeOptions, build_runtime_context
 from ..runtime.session_service import SessionLifecycleService
 from ..tts import TTSService, build_default_tts_service
@@ -24,6 +28,7 @@ from .services.web_console import WebConsoleService
 RuntimeContextBuilder = Callable[[RuntimeOptions], RuntimeContext]
 TTSServiceBuilder = Callable[[Path], TTSService]
 ASRServiceBuilder = Callable[[Path], ASRService]
+logger = logging.getLogger(__name__)
 
 
 class AppRuntime:
@@ -50,7 +55,7 @@ class AppRuntime:
         self.channels_config: ChannelsConfig | None = None
         self.channel_manager: ChannelManager | None = None
         self.delivery_store: DeliveryStore | None = None
-        self.route_session_store: RouteSessionStore | None = None
+        self.route_binding_store: RouteBindingStore | None = None
         self.gateway: GatewayRuntime | None = None
         self.gateway_task: asyncio.Task[None] | None = None
         self.session_service: GatewaySessionService | None = None
@@ -60,6 +65,7 @@ class AppRuntime:
         self.web_console_service: WebConsoleService | None = None
         self.tts_service: TTSService | None = None
         self.asr_service: ASRService | None = None
+        self._settings_change_lock = asyncio.Lock()
         self._started = False
 
     @property
@@ -83,17 +89,16 @@ class AppRuntime:
         self.delivery_store = DeliveryStore(
             self.context.workspace / ".echobot" / "delivery.json",
         )
-        self.route_session_store = RouteSessionStore(
-            self.context.workspace / ".echobot" / "route_sessions.json",
+        self.route_binding_store = RouteBindingStore(
+            self.context.workspace / ".echobot" / "route_bindings.jsonl",
         )
         core_session_service = SessionLifecycleService(
             self.context.session_store,
-            self.context.agent_session_store,
             coordinator=self.context.coordinator,
         )
         self.session_service = GatewaySessionService(
             core_session_service,
-            route_session_store=self.route_session_store,
+            route_binding_store=self.route_binding_store,
             delivery_store=self.delivery_store,
         )
         self.gateway = GatewayRuntime(
@@ -121,8 +126,21 @@ class AppRuntime:
             self.tts_service,
             self.asr_service,
         )
-        asr_initialized = await self.web_console_service.initialize_runtime_settings()
-        if not asr_initialized:
+        selected_asr_provider = (
+            self.context.settings_service.settings.speech.asr_provider
+        )
+        asr_snapshot = await self.asr_service.status_snapshot()
+        available_asr_providers = {
+            provider.name for provider in asr_snapshot.asr_providers
+        }
+        if selected_asr_provider in available_asr_providers:
+            await self.asr_service.set_selected_asr_provider(selected_asr_provider)
+        else:
+            logger.warning(
+                "Configured ASR provider %s is unavailable; keeping %s",
+                selected_asr_provider,
+                asr_snapshot.selected_asr_provider,
+            )
             await self.asr_service.on_startup()
 
         await self.channel_manager.start_all()
@@ -131,6 +149,235 @@ class AppRuntime:
             name="echobot_gateway_runtime",
         )
         self._started = True
+
+    async def select_llm_provider(
+        self,
+        provider_name: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, object]:
+        if self.context is None:
+            raise RuntimeError("App runtime has not been started")
+
+        async with self._settings_change_lock:
+            if not self.context.provider_manager.has_profile(provider_name):
+                raise ValueError(f"Unknown LLM provider profile: {provider_name}")
+            settings = await asyncio.to_thread(
+                self.context.settings_service.select_llm_provider,
+                provider_name,
+                expected_revision=expected_revision,
+            )
+            profile = self.context.provider_manager.select(provider_name)
+            self.context.supports_image_input = profile.supports_image_input
+            self.context.runtime_controls.supports_image_input = (
+                profile.supports_image_input
+            )
+            return self._llm_snapshot(settings_revision=settings.revision)
+
+    async def create_llm_provider(
+        self,
+        data: dict[str, object],
+        *,
+        api_key: str | None,
+        expected_config_revision: int | None = None,
+    ) -> dict[str, object]:
+        context = self._require_llm_configuration()
+        provider_name = str(data.get("name", "") or "").strip().lower()
+
+        async with self._settings_change_lock:
+            if context.provider_manager.has_profile(provider_name):
+                raise ValueError(f"LLM provider already exists: {provider_name}")
+            profile, _revision = await asyncio.to_thread(
+                context.llm_configuration.create,
+                data,
+                api_key=api_key,
+                expected_revision=expected_config_revision,
+            )
+            await context.provider_manager.upsert_profile(profile)
+
+            settings = context.settings_service.settings
+            if not context.provider_manager.active_provider_name:
+                settings = await asyncio.to_thread(
+                    context.settings_service.repair_llm_provider,
+                    profile.name,
+                )
+                context.provider_manager.select(profile.name)
+                self._apply_active_llm_profile(profile)
+            return self._llm_snapshot(settings_revision=settings.revision)
+
+    async def update_llm_provider(
+        self,
+        provider_name: str,
+        updates: dict[str, object],
+        *,
+        api_key: str | None,
+        clear_api_key: bool,
+        expected_config_revision: int | None = None,
+    ) -> dict[str, object]:
+        context = self._require_llm_configuration()
+
+        async with self._settings_change_lock:
+            current = context.provider_manager.get_profile(provider_name)
+            if current is None:
+                raise ValueError(f"Unknown LLM provider profile: {provider_name}")
+            if not current.editable:
+                raise ValueError("Environment providers are read-only")
+            profile, _revision = await asyncio.to_thread(
+                context.llm_configuration.update,
+                provider_name,
+                updates,
+                api_key=api_key,
+                clear_api_key=clear_api_key,
+                expected_revision=expected_config_revision,
+            )
+            await context.provider_manager.upsert_profile(profile)
+            if context.provider_manager.active_provider_name == profile.name:
+                self._apply_active_llm_profile(profile)
+            return self._llm_snapshot()
+
+    async def delete_llm_provider(
+        self,
+        provider_name: str,
+        *,
+        expected_config_revision: int | None = None,
+    ) -> dict[str, object]:
+        context = self._require_llm_configuration()
+
+        async with self._settings_change_lock:
+            current = context.provider_manager.get_profile(provider_name)
+            if current is None:
+                raise ValueError(f"Unknown LLM provider profile: {provider_name}")
+            if not current.editable:
+                raise ValueError("Environment providers are read-only")
+            if context.provider_manager.active_provider_name == provider_name:
+                raise ValueError(
+                    "Select another LLM provider before deleting this one"
+                )
+            await asyncio.to_thread(
+                context.llm_configuration.delete,
+                provider_name,
+                expected_revision=expected_config_revision,
+            )
+            await context.provider_manager.delete_profile(provider_name)
+            return self._llm_snapshot()
+
+    async def test_llm_provider(
+        self,
+        data: dict[str, object],
+        *,
+        api_key: str | None,
+        existing_name: str | None = None,
+    ) -> dict[str, object]:
+        context = self._require_llm_configuration()
+        profile = await asyncio.to_thread(
+            context.llm_configuration.build_draft_profile,
+            data,
+            api_key=api_key,
+            existing_name=existing_name,
+        )
+        provider = OpenAICompatibleProvider(profile.settings)
+        try:
+            response = await provider.generate(
+                [LLMMessage(role="user", content="Reply with OK.")],
+                max_tokens=1,
+                temperature=0,
+            )
+            return {
+                "success": True,
+                "message": "Connection successful",
+                "model": response.model or profile.settings.model,
+            }
+        finally:
+            await provider.close()
+
+    async def discover_llm_models(
+        self,
+        data: dict[str, object],
+        *,
+        api_key: str | None,
+        existing_name: str | None = None,
+    ) -> dict[str, object]:
+        context = self._require_llm_configuration()
+        profile = await asyncio.to_thread(
+            context.llm_configuration.build_draft_profile,
+            data,
+            api_key=api_key,
+            existing_name=existing_name,
+        )
+        provider = OpenAICompatibleProvider(profile.settings)
+        try:
+            return {"models": await provider.list_models()}
+        finally:
+            await provider.close()
+
+    def _require_llm_configuration(self) -> RuntimeContext:
+        if self.context is None or self.context.llm_configuration is None:
+            raise RuntimeError("LLM provider configuration is unavailable")
+        return self.context
+
+    def _apply_active_llm_profile(self, profile) -> None:
+        if self.context is None:
+            return
+        self.context.supports_image_input = profile.supports_image_input
+        self.context.runtime_controls.supports_image_input = (
+            profile.supports_image_input
+        )
+
+    def _llm_snapshot(
+        self,
+        *,
+        settings_revision: int | None = None,
+    ) -> dict[str, object]:
+        if self.context is None:
+            raise RuntimeError("App runtime has not been started")
+        if settings_revision is None:
+            settings_revision = self.context.settings_service.settings.revision
+        config_revision = (
+            self.context.llm_configuration.revision
+            if self.context.llm_configuration is not None
+            else 0
+        )
+        return self.context.provider_manager.public_snapshot(
+            revision=settings_revision,
+            config_revision=config_revision,
+        )
+
+    async def select_asr_provider(
+        self,
+        provider_name: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, object]:
+        if self.context is None or self.asr_service is None:
+            raise RuntimeError("App runtime has not been started")
+
+        async with self._settings_change_lock:
+            previous_provider = self.asr_service.selected_asr_provider
+            try:
+                await self.asr_service.set_selected_asr_provider(provider_name)
+                settings = await asyncio.to_thread(
+                    self.context.settings_service.select_asr_provider,
+                    provider_name,
+                    expected_revision=expected_revision,
+                )
+            except Exception:
+                if self.asr_service.selected_asr_provider != previous_provider:
+                    try:
+                        await self.asr_service.set_selected_asr_provider(
+                            previous_provider
+                        )
+                    except Exception:
+                        logger.exception(
+                            "Failed to restore ASR provider %s",
+                            previous_provider,
+                        )
+                raise
+
+            snapshot = await self.asr_service.status_snapshot()
+            return {
+                **asdict(snapshot),
+                "revision": settings.revision,
+            }
 
     async def stop(self) -> None:
         if not self._started:
@@ -146,6 +393,7 @@ class AppRuntime:
 
         if self.context is not None:
             await self.context.coordinator.close()
+            await self.context.provider_manager.close()
         if self.tts_service is not None:
             await self.tts_service.close()
         if self.asr_service is not None:
@@ -186,20 +434,21 @@ class AppRuntime:
 
         current_session = await self.session_service.load_current_session()
         current_role = await self.context.coordinator.current_role_name(
-            current_session.name,
+            current_session.id,
         )
-        job_counts = await self.context.coordinator.job_counts()
+        run_counts = await self.context.coordinator.run_counts()
         return {
             "status": "ok",
             "workspace": str(self.context.workspace),
-            "current_session": current_session.name,
+            "current_session_id": current_session.id,
+            "current_session_title": current_session.title,
             "current_role": current_role,
             "channels": self.channel_status(),
             "bus": {
                 "inbound_size": self.bus.inbound_size,
                 "outbound_size": self.bus.outbound_size,
             },
-            "jobs": job_counts,
+            "runs": run_counts,
         }
 
 

@@ -1,5 +1,6 @@
 from .base import (
     BaseTool,
+    ToolExecutionMode,
     ToolExecutionOutput,
     ToolLoopControl,
     ToolRegistry,
@@ -40,6 +41,7 @@ __all__ = [
     "SendFileToUserTool",
     "SendImageToUserTool",
     "ToolExecutionOutput",
+    "ToolExecutionMode",
     "ToolLoopControl",
     "ToolRegistry",
     "ToolResult",

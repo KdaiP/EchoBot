@@ -46,10 +46,6 @@ class ChannelAddress:
         parts.append(digest)
         return "__".join(parts)
 
-    @property
-    def session_name(self) -> str:
-        return self.route_key
-
     def to_dict(self) -> dict[str, Any]:
         return {
             "channel": self.channel,
@@ -80,10 +76,6 @@ class InboundMessage:
     @property
     def route_key(self) -> str:
         return self.address.route_key
-
-    @property
-    def session_name(self) -> str:
-        return self.route_key
 
 
 @dataclass(slots=True)

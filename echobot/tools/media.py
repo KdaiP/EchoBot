@@ -37,6 +37,7 @@ class _WorkspaceAttachmentTool(WorkspaceTool):
 
 class ViewImageTool(_WorkspaceAttachmentTool):
     name = "view_image"
+    execution_mode = "parallel"
     description = (
         "Load a local image file into the next model request so the model "
         "can inspect it visually."

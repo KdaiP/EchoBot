@@ -1,8 +1,8 @@
 import {
-    cancelChatJob,
+    cancelAgentRun,
     deleteAttachment,
-    requestChatJob,
-    requestChatJobTrace,
+    requestAgentRun,
+    requestAgentRunEvents,
     requestChatStream,
     requestJson,
     responseToError,
@@ -16,10 +16,12 @@ import { createAsrModule } from "./features/asr.js";
 import { createChatModule } from "./features/chat/index.js";
 import { createLayoutModule } from "./features/layout/index.js";
 import { createLive2DModule } from "./features/live2d/index.js";
+import { createLlmProvidersModule } from "./features/llm-providers.js";
 import { createRolesModule } from "./features/roles.js";
 import { createSessionsModule } from "./features/sessions.js";
 import { createTtsModule } from "./features/tts.js";
 import {
+    addErrorMessage,
     addMessage,
     addSystemMessage,
     clearMessages,
@@ -32,7 +34,6 @@ import {
     clamp,
     delay,
     formatTimestamp,
-    normalizeSessionName,
     roundTo,
     smoothValue,
 } from "./modules/utils.js";
@@ -41,6 +42,11 @@ const status = createUiStatusController();
 const layout = createLayoutModule({
     addMessage,
     formatTimestamp,
+    requestJson,
+    setRunStatus: status.setRunStatus,
+});
+const llmProviders = createLlmProvidersModule({
+    applyLlmConfig: layout.applyLlmConfig,
     requestJson,
     setRunStatus: status.setRunStatus,
 });
@@ -81,7 +87,6 @@ const sessions = createSessionsModule({
     addSystemMessage,
     clearMessages,
     formatTimestamp,
-    normalizeSessionName,
     requestJson,
     speakText: tts.speakText,
     setRunStatus: status.setRunStatus,
@@ -89,29 +94,28 @@ const sessions = createSessionsModule({
 });
 const roles = createRolesModule({
     addMessage,
-    normalizeSessionName,
     requestJson,
     setRunStatus: status.setRunStatus,
 });
 const traces = createTraceModule();
 const chat = createChatModule({
+    addErrorMessage,
     addMessage,
     applySessionSummaries: sessions.applySessionSummaries,
-    cancelChatJob,
+    cancelAgentRun,
     createSpeechSession: tts.createSpeechSession,
     drainVoicePromptQueue: asr.drainVoicePromptQueue,
     deleteAttachment,
     ensureAudioContextReady: tts.ensureAudioContextReady,
     finalizeSpeechSession: tts.finalizeSpeechSession,
-    normalizeSessionName,
     queueSpeechSessionText: tts.queueSpeechSessionText,
     removeMessage,
-    requestChatJob,
-    requestChatJobTrace,
+    requestAgentRun,
+    requestAgentRunEvents,
     requestChatStream,
     requestSessionSummaries: sessions.requestSessionSummaries,
     resetTracePanel: traces.resetTracePanel,
-    setActiveBackgroundJob: status.setActiveBackgroundJob,
+    setActiveAgentRun: status.setActiveAgentRun,
     setChatBusy: status.setChatBusy,
     setRunStatus: status.setRunStatus,
     speakText: tts.speakText,
@@ -151,6 +155,7 @@ async function initializePage() {
         chat,
         layout,
         live2d,
+        llmProviders,
         roles,
         sessions,
         status,
@@ -172,6 +177,8 @@ async function initializePage() {
         const config = await requestJson("/api/web/config");
         appState.config = config;
         layout.applyRuntimeConfig(config.runtime);
+        layout.applyLlmConfig(config.llm);
+        llmProviders.maybeOpenFirstRun();
         const activeLive2DConfig = live2d.applyConfigToUI(config);
 
         live2d.initializePixiApplication();
@@ -181,7 +188,7 @@ async function initializePage() {
         live2d.renderLive2DControls(appState.config.live2d);
         layout.restoreSessionSidebarState();
         layout.restoreRoleSidebarState();
-        await sessions.initializeSessionPanel(config.session_name);
+        await sessions.initializeSessionPanel(config.session_id);
         await roles.initializeRolePanel();
         await tts.loadTtsOptions(config.tts);
         asr.applyAsrStatus(config.asr);
@@ -190,7 +197,7 @@ async function initializePage() {
 
         status.setConnectionState("ready", "已连接");
         status.setRunStatus("准备就绪");
-        status.setActiveBackgroundJob("");
+        status.setActiveAgentRun("");
     } catch (error) {
         console.error(error);
         status.setConnectionState("error", "初始化失败");

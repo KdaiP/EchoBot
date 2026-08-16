@@ -7,7 +7,6 @@ from typing import Any
 from ....asr import ASRService
 from ....tts import TTSService
 from .live2d import Live2DService, Live2DUploadFile
-from .settings import WebRuntimeSettingsService
 from .stage import StageBackgroundService
 
 
@@ -21,7 +20,6 @@ class WebConsoleService:
         self._tts_service = tts_service
         self._asr_service = asr_service
         app_root = Path(__file__).resolve().parents[2]
-        self._runtime_settings_service = WebRuntimeSettingsService(workspace)
         self._live2d_service = Live2DService(
             workspace / ".echobot" / "live2d",
             app_root / "builtin_live2d",
@@ -39,36 +37,32 @@ class WebConsoleService:
     def asr_service(self) -> ASRService:
         return self._asr_service
 
-    async def initialize_runtime_settings(self) -> bool:
-        settings = await self._runtime_settings_service.load_settings()
-        selected_asr_provider = settings.selected_asr_provider
-        if not selected_asr_provider:
-            return False
-
-        try:
-            await self._asr_service.set_selected_asr_provider(selected_asr_provider)
-        except ValueError:
-            return False
-        return True
-
     async def build_frontend_config(
         self,
         *,
-        session_name: str,
+        session_id: str,
+        session_title: str,
         role_name: str,
         route_mode: str,
         runtime_config: dict[str, Any],
+        llm_config: dict[str, Any],
+        settings_revision: int,
     ) -> dict[str, Any]:
         live2d = await self._live2d_service.build_config()
         stage = await self._stage_background_service.build_config()
         return {
-            "session_name": session_name,
+            "session_id": session_id,
+            "session_title": session_title,
             "role_name": role_name,
             "route_mode": route_mode,
             "runtime": dict(runtime_config),
+            "llm": dict(llm_config),
             "live2d": live2d or self._live2d_service.empty_config(),
             "stage": stage,
-            "asr": asdict(await self._asr_service.status_snapshot()),
+            "asr": {
+                **asdict(await self._asr_service.status_snapshot()),
+                "revision": settings_revision,
+            },
             "tts": {
                 "default_provider": self._tts_service.default_provider,
                 "default_voice": self._tts_service.default_voice_for(),
@@ -85,11 +79,6 @@ class WebConsoleService:
 
     async def build_stage_config(self) -> dict[str, Any]:
         return await self._stage_background_service.build_config()
-
-    async def set_selected_asr_provider(self, provider_name: str) -> dict[str, Any]:
-        await self._asr_service.set_selected_asr_provider(provider_name)
-        await self._runtime_settings_service.save_selected_asr_provider(provider_name)
-        return asdict(await self._asr_service.status_snapshot())
 
     def resolve_live2d_asset(self, asset_path: str) -> Path:
         return self._live2d_service.resolve_asset(asset_path)

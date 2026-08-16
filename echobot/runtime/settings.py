@@ -1,16 +1,23 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import threading
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, ClassVar, Protocol
+from typing import Any, Protocol
 
 from ..tools.shell import normalize_shell_safety_mode
 
 
 DEFAULT_SHELL_SAFETY_MODE = "danger-full-access"
+SETTINGS_FILE_NAME = "settings.json"
+
+
+class SettingsConflictError(RuntimeError):
+    """Raised when a client tries to update an outdated settings snapshot."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -35,6 +42,30 @@ class RuntimeConfigSnapshot:
             normalize_shell_safety_mode(self.shell_safety_mode),
         )
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> RuntimeConfigSnapshot:
+        return cls(
+            delegated_ack_enabled=_required_bool(
+                data.get("delegated_ack_enabled"),
+                name="delegated_ack_enabled",
+            ),
+            shell_safety_mode=normalize_shell_safety_mode(
+                _required_text(data.get("shell_safety_mode"), name="shell_safety_mode")
+            ),
+            file_write_enabled=_required_bool(
+                data.get("file_write_enabled"),
+                name="file_write_enabled",
+            ),
+            cron_mutation_enabled=_required_bool(
+                data.get("cron_mutation_enabled"),
+                name="cron_mutation_enabled",
+            ),
+            web_private_network_enabled=_required_bool(
+                data.get("web_private_network_enabled"),
+                name="web_private_network_enabled",
+            ),
+        )
+
     def to_dict(self) -> dict[str, object]:
         return {
             "delegated_ack_enabled": self.delegated_ack_enabled,
@@ -42,6 +73,72 @@ class RuntimeConfigSnapshot:
             "file_write_enabled": self.file_write_enabled,
             "cron_mutation_enabled": self.cron_mutation_enabled,
             "web_private_network_enabled": self.web_private_network_enabled,
+        }
+
+
+@dataclass(frozen=True, slots=True)
+class LLMSelection:
+    active_provider: str = "default"
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> LLMSelection:
+        active_provider = data.get("active_provider", "")
+        if not isinstance(active_provider, str):
+            raise ValueError("llm.active_provider must be a string")
+        return cls(
+            active_provider=active_provider.strip()
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        return {"active_provider": self.active_provider}
+
+
+@dataclass(frozen=True, slots=True)
+class SpeechSettings:
+    asr_provider: str
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> SpeechSettings:
+        return cls(
+            asr_provider=_required_text(
+                data.get("asr_provider"),
+                name="speech.asr_provider",
+            )
+        )
+
+    def to_dict(self) -> dict[str, str]:
+        return {"asr_provider": self.asr_provider}
+
+
+@dataclass(frozen=True, slots=True)
+class AppSettings:
+    revision: int
+    runtime: RuntimeConfigSnapshot
+    llm: LLMSelection
+    speech: SpeechSettings
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> AppSettings:
+        revision = data.get("revision")
+        if not isinstance(revision, int) or isinstance(revision, bool) or revision < 0:
+            raise ValueError("revision must be a non-negative integer")
+
+        runtime = _required_mapping(data.get("runtime"), name="runtime")
+        llm = _required_mapping(data.get("llm"), name="llm")
+        speech = _required_mapping(data.get("speech"), name="speech")
+        return cls(
+            revision=revision,
+            runtime=RuntimeConfigSnapshot.from_dict(runtime),
+            llm=LLMSelection.from_dict(llm),
+            speech=SpeechSettings.from_dict(speech),
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "revision": self.revision,
+            "runtime": self.runtime.to_dict(),
+            "llm": self.llm.to_dict(),
+            "speech": self.speech.to_dict(),
         }
 
 
@@ -89,368 +186,223 @@ class RuntimeControls:
     file_write_enabled: bool = True
     cron_mutation_enabled: bool = True
     web_private_network_enabled: bool = False
+    supports_image_input: bool = True
 
     def __post_init__(self) -> None:
         self.shell_safety_mode = normalize_shell_safety_mode(self.shell_safety_mode)
 
-    def set_shell_safety_mode(self, value: str) -> None:
-        self.shell_safety_mode = normalize_shell_safety_mode(value)
-
-    def set_file_write_enabled(self, value: bool) -> None:
-        self.file_write_enabled = bool(value)
-
-    def set_cron_mutation_enabled(self, value: bool) -> None:
-        self.cron_mutation_enabled = bool(value)
-
-    def set_web_private_network_enabled(self, value: bool) -> None:
-        self.web_private_network_enabled = bool(value)
+    def apply(self, settings: RuntimeConfigSnapshot) -> None:
+        self.shell_safety_mode = settings.shell_safety_mode
+        self.file_write_enabled = settings.file_write_enabled
+        self.cron_mutation_enabled = settings.cron_mutation_enabled
+        self.web_private_network_enabled = settings.web_private_network_enabled
 
 
-@dataclass(slots=True)
-class RuntimeSettings:
-    delegated_ack_enabled: bool | None = None
-    selected_asr_provider: str | None = None
-    shell_safety_mode: str | None = None
-    file_write_enabled: bool | None = None
-    cron_mutation_enabled: bool | None = None
-    web_private_network_enabled: bool | None = None
-    extra_values: dict[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RuntimeSettings":
-        extra_values = dict(data)
-        raw_value = extra_values.pop("delegated_ack_enabled", None)
-        if raw_value is None:
-            delegated_ack_enabled = None
-        elif isinstance(raw_value, bool):
-            delegated_ack_enabled = raw_value
-        else:
-            raise ValueError("delegated_ack_enabled must be a boolean")
-
-        raw_asr_provider = extra_values.pop("selected_asr_provider", None)
-        if raw_asr_provider is None:
-            selected_asr_provider = None
-        elif isinstance(raw_asr_provider, str):
-            selected_asr_provider = raw_asr_provider.strip() or None
-        else:
-            raise ValueError("selected_asr_provider must be a string")
-
-        raw_shell_safety_mode = extra_values.pop("shell_safety_mode", None)
-        if raw_shell_safety_mode is None:
-            shell_safety_mode = None
-        elif isinstance(raw_shell_safety_mode, str):
-            shell_safety_mode = normalize_shell_safety_mode(raw_shell_safety_mode)
-        else:
-            raise ValueError("shell_safety_mode must be a string")
-
-        file_write_enabled = _optional_bool(
-            extra_values.pop("file_write_enabled", None),
-            name="file_write_enabled",
-        )
-        cron_mutation_enabled = _optional_bool(
-            extra_values.pop("cron_mutation_enabled", None),
-            name="cron_mutation_enabled",
-        )
-        web_private_network_enabled = _optional_bool(
-            extra_values.pop("web_private_network_enabled", None),
-            name="web_private_network_enabled",
-        )
-
-        return cls(
-            delegated_ack_enabled=delegated_ack_enabled,
-            selected_asr_provider=selected_asr_provider,
-            shell_safety_mode=shell_safety_mode,
-            file_write_enabled=file_write_enabled,
-            cron_mutation_enabled=cron_mutation_enabled,
-            web_private_network_enabled=web_private_network_enabled,
-            extra_values=extra_values,
-        )
-
-    def to_dict(self) -> dict[str, Any]:
-        data = dict(self.extra_values)
-        if self.delegated_ack_enabled is not None:
-            data["delegated_ack_enabled"] = self.delegated_ack_enabled
-        if self.selected_asr_provider is not None:
-            data["selected_asr_provider"] = self.selected_asr_provider
-        if self.shell_safety_mode is not None:
-            data["shell_safety_mode"] = self.shell_safety_mode
-        if self.file_write_enabled is not None:
-            data["file_write_enabled"] = self.file_write_enabled
-        if self.cron_mutation_enabled is not None:
-            data["cron_mutation_enabled"] = self.cron_mutation_enabled
-        if self.web_private_network_enabled is not None:
-            data["web_private_network_enabled"] = self.web_private_network_enabled
-        return data
-
-    def get_named_value(self, name: str) -> Any:
-        if name == "delegated_ack_enabled":
-            return self.delegated_ack_enabled
-        if name == "selected_asr_provider":
-            return self.selected_asr_provider
-        if name == "shell_safety_mode":
-            return self.shell_safety_mode
-        if name == "file_write_enabled":
-            return self.file_write_enabled
-        if name == "cron_mutation_enabled":
-            return self.cron_mutation_enabled
-        if name == "web_private_network_enabled":
-            return self.web_private_network_enabled
-        raise KeyError(name)
-
-    def set_named_value(self, name: str, value: Any) -> None:
-        if name == "delegated_ack_enabled":
-            if value is not None and not isinstance(value, bool):
-                raise ValueError("delegated_ack_enabled must be a boolean")
-            self.delegated_ack_enabled = value
-            return
-        if name == "selected_asr_provider":
-            if value is None:
-                self.selected_asr_provider = None
-                return
-            if not isinstance(value, str):
-                raise ValueError("selected_asr_provider must be a string")
-            normalized_value = value.strip()
-            self.selected_asr_provider = normalized_value or None
-            return
-        if name == "shell_safety_mode":
-            if value is None:
-                self.shell_safety_mode = None
-                return
-            if not isinstance(value, str):
-                raise ValueError("shell_safety_mode must be a string")
-            self.shell_safety_mode = normalize_shell_safety_mode(value)
-            return
-        if name == "file_write_enabled":
-            self.file_write_enabled = _required_bool(value, name="file_write_enabled")
-            return
-        if name == "cron_mutation_enabled":
-            self.cron_mutation_enabled = _required_bool(
-                value,
-                name="cron_mutation_enabled",
-            )
-            return
-        if name == "web_private_network_enabled":
-            self.web_private_network_enabled = _required_bool(
-                value,
-                name="web_private_network_enabled",
-            )
-            return
-        raise KeyError(name)
-
-    def clear_named_value(self, name: str) -> None:
-        if name == "delegated_ack_enabled":
-            self.delegated_ack_enabled = None
-            return
-        if name == "shell_safety_mode":
-            self.shell_safety_mode = None
-            return
-        if name == "file_write_enabled":
-            self.file_write_enabled = None
-            return
-        if name == "cron_mutation_enabled":
-            self.cron_mutation_enabled = None
-            return
-        if name == "web_private_network_enabled":
-            self.web_private_network_enabled = None
-            return
-        raise KeyError(name)
-
-
-class RuntimeSettingsStore:
-    _locks_guard: ClassVar[threading.Lock] = threading.Lock()
-    _locks_by_path: ClassVar[dict[Path, threading.Lock]] = {}
+class SettingsStore:
+    """Store one validated settings document using an atomic file replace."""
 
     def __init__(self, path: str | Path) -> None:
         self.path = Path(path)
-        self._lock = self._lock_for_path(self.path.resolve())
 
-    def load(self) -> RuntimeSettings:
-        with self._lock:
-            return self._load_unlocked()
-
-    def save(self, settings: RuntimeSettings) -> RuntimeSettings:
-        with self._lock:
-            return self._save_unlocked(settings)
-
-    def update(
-        self,
-        updater: Callable[[RuntimeSettings], None],
-    ) -> RuntimeSettings:
-        with self._lock:
-            settings = self._load_unlocked()
-            updater(settings)
-            return self._save_unlocked(settings)
-
-    def update_named_value(self, name: str, value: Any) -> RuntimeSettings:
-        return self.update(lambda settings: settings.set_named_value(name, value))
-
-    @classmethod
-    def _lock_for_path(cls, path: Path) -> threading.Lock:
-        with cls._locks_guard:
-            lock = cls._locks_by_path.get(path)
-            if lock is None:
-                lock = threading.Lock()
-                cls._locks_by_path[path] = lock
-            return lock
-
-    def _load_unlocked(self) -> RuntimeSettings:
+    def load(self, defaults: AppSettings) -> AppSettings:
         if not self.path.exists():
-            return RuntimeSettings()
-
+            return defaults
         payload = json.loads(self.path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
-            raise ValueError("Runtime settings file must contain a JSON object")
-        return RuntimeSettings.from_dict(payload)
+            raise ValueError("Settings file must contain a JSON object")
+        return AppSettings.from_dict(payload)
 
-    def _save_unlocked(self, settings: RuntimeSettings) -> RuntimeSettings:
+    def save(self, settings: AppSettings) -> None:
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(
-            json.dumps(settings.to_dict(), ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
+        content = json.dumps(settings.to_dict(), ensure_ascii=False, indent=2) + "\n"
+        file_descriptor, temporary_name = tempfile.mkstemp(
+            dir=self.path.parent,
+            prefix=f".{self.path.name}.",
+            suffix=".tmp",
+            text=True,
         )
-        return settings
+        temporary_path = Path(temporary_name)
+        try:
+            with os.fdopen(file_descriptor, "w", encoding="utf-8", newline="\n") as file:
+                file.write(content)
+                file.flush()
+                os.fsync(file.fileno())
+            temporary_path.replace(self.path)
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
 
-class RuntimeSettingsManager:
+class SettingsService:
+    """Resolve, persist, and apply EchoBot's user-changeable settings."""
+
     def __init__(
         self,
         workspace: str | Path,
         *,
+        defaults: AppSettings,
+        coordinator: RuntimeSettingsCoordinator | None = None,
+        runtime_controls: RuntimeControls | None = None,
+    ) -> None:
+        self._store = SettingsStore(
+            Path(workspace) / ".echobot" / SETTINGS_FILE_NAME
+        )
+        self._defaults = defaults
+        self._coordinator = coordinator
+        self._runtime_controls = runtime_controls
+        self._lock = threading.Lock()
+        self._settings = self._store.load(defaults)
+
+    @property
+    def settings(self) -> AppSettings:
+        with self._lock:
+            return self._settings
+
+    def bind_runtime(
+        self,
         coordinator: RuntimeSettingsCoordinator,
         runtime_controls: RuntimeControls,
     ) -> None:
-        self._coordinator = coordinator
-        self._runtime_controls = runtime_controls
-        self._store = RuntimeSettingsStore(
-            Path(workspace) / ".echobot" / "runtime_settings.json",
-        )
+        with self._lock:
+            self._coordinator = coordinator
+            self._runtime_controls = runtime_controls
+            self._apply_runtime(self._settings.runtime)
 
-    @property
-    def definitions(self) -> dict[str, RuntimeSettingDefinition]:
-        return RUNTIME_SETTING_DEFINITIONS
+    def runtime_snapshot(self) -> dict[str, object]:
+        with self._lock:
+            return {
+                "revision": self._settings.revision,
+                **self._settings.runtime.to_dict(),
+            }
 
-    def snapshot(self) -> dict[str, object]:
-        return runtime_settings_snapshot(
-            self._coordinator,
-            self._runtime_controls,
-        )
-
-    def get(self, name: str) -> object:
-        normalized_name = _normalize_runtime_setting_name(name)
-        return self.snapshot()[normalized_name]
-
-    def apply_named_value(self, name: str, value: Any) -> dict[str, object]:
-        normalized_name = _normalize_runtime_setting_name(name)
-        return self.apply_updates({normalized_name: value})
-
-    def apply_updates(self, updates: Mapping[str, Any]) -> dict[str, object]:
+    def apply_runtime_updates(
+        self,
+        updates: Mapping[str, Any],
+        *,
+        expected_revision: int | None = None,
+    ) -> dict[str, object]:
         normalized_updates = _normalize_runtime_updates(updates)
         if not normalized_updates:
             raise ValueError("At least one runtime setting must be provided")
 
-        self._store.update(
-            lambda settings: _apply_runtime_updates_to_settings(
-                settings,
-                normalized_updates,
-            )
-        )
+        with self._lock:
+            self._check_revision(expected_revision)
+            values = self._settings.runtime.to_dict()
+            values.update(normalized_updates)
+            runtime = RuntimeConfigSnapshot.from_dict(values)
+            self._commit(replace(self._settings, runtime=runtime))
+            self._apply_runtime(runtime)
+            return {"revision": self._settings.revision, **runtime.to_dict()}
 
-        for name, value in normalized_updates.items():
-            _apply_runtime_setting(
-                self._coordinator,
-                self._runtime_controls,
-                name,
-                value,
-            )
-
-        return self.snapshot()
-
-    def reset_overrides(
+    def reset_runtime(
         self,
-        defaults: Mapping[str, Any],
+        *,
+        expected_revision: int | None = None,
     ) -> dict[str, object]:
-        normalized_defaults = _normalize_runtime_defaults(defaults)
-        self._store.update(_clear_runtime_override_values)
+        with self._lock:
+            self._check_revision(expected_revision)
+            runtime = self._defaults.runtime
+            self._commit(replace(self._settings, runtime=runtime))
+            self._apply_runtime(runtime)
+            return {"revision": self._settings.revision, **runtime.to_dict()}
 
-        for name, value in normalized_defaults.items():
-            _apply_runtime_setting(
-                self._coordinator,
-                self._runtime_controls,
-                name,
-                value,
+    def select_llm_provider(
+        self,
+        provider_name: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> AppSettings:
+        normalized_name = _required_text(provider_name, name="provider")
+        with self._lock:
+            self._check_revision(expected_revision)
+            candidate = replace(
+                self._settings,
+                llm=LLMSelection(active_provider=normalized_name),
+            )
+            self._commit(candidate)
+            return self._settings
+
+    def repair_llm_provider(self, provider_name: str) -> AppSettings:
+        """Repair a stale selection after providers changed outside settings."""
+        normalized_name = str(provider_name or "").strip()
+        with self._lock:
+            if self._settings.llm.active_provider == normalized_name:
+                return self._settings
+            candidate = replace(
+                self._settings,
+                llm=LLMSelection(active_provider=normalized_name),
+            )
+            self._commit(candidate)
+            return self._settings
+
+    def select_asr_provider(
+        self,
+        provider_name: str,
+        *,
+        expected_revision: int | None = None,
+    ) -> AppSettings:
+        normalized_name = _required_text(provider_name, name="provider")
+        with self._lock:
+            self._check_revision(expected_revision)
+            candidate = replace(
+                self._settings,
+                speech=SpeechSettings(asr_provider=normalized_name),
+            )
+            self._commit(candidate)
+            return self._settings
+
+    def get_runtime_value(self, name: str) -> object:
+        normalized_name = _normalize_runtime_setting_name(name)
+        return self.runtime_snapshot()[normalized_name]
+
+    def _check_revision(self, expected_revision: int | None) -> None:
+        if expected_revision is None:
+            return
+        if expected_revision != self._settings.revision:
+            raise SettingsConflictError(
+                f"Settings changed: expected revision {expected_revision}, "
+                f"current revision is {self._settings.revision}"
             )
 
-        return self.snapshot()
+    def _commit(self, candidate: AppSettings) -> None:
+        next_settings = replace(candidate, revision=self._settings.revision + 1)
+        self._store.save(next_settings)
+        self._settings = next_settings
 
-
-def runtime_settings_snapshot(
-    coordinator: RuntimeSettingsCoordinator,
-    runtime_controls: RuntimeControls,
-) -> dict[str, object]:
-    return {
-        "delegated_ack_enabled": coordinator.delegated_ack_enabled,
-        "shell_safety_mode": runtime_controls.shell_safety_mode,
-        "file_write_enabled": runtime_controls.file_write_enabled,
-        "cron_mutation_enabled": runtime_controls.cron_mutation_enabled,
-        "web_private_network_enabled": runtime_controls.web_private_network_enabled,
-    }
+    def _apply_runtime(self, runtime: RuntimeConfigSnapshot) -> None:
+        if self._coordinator is None or self._runtime_controls is None:
+            return
+        self._coordinator.set_delegated_ack_enabled(runtime.delegated_ack_enabled)
+        self._runtime_controls.apply(runtime)
 
 
 def parse_text_runtime_setting_value(name: str, raw_value: str) -> object:
     normalized_name = _normalize_runtime_setting_name(name)
     cleaned = str(raw_value or "").strip().lower()
-    if normalized_name == "delegated_ack_enabled":
-        return _parse_on_off_value(
-            cleaned,
-            name="delegated_ack_enabled",
-        )
     if normalized_name == "shell_safety_mode":
         return normalize_shell_safety_mode(cleaned)
-    if normalized_name in {
-        "file_write_enabled",
-        "cron_mutation_enabled",
-        "web_private_network_enabled",
-    }:
-        return _parse_on_off_value(cleaned, name=normalized_name)
-    raise KeyError(normalized_name)
+    return _parse_on_off_value(cleaned, name=normalized_name)
 
 
 def format_runtime_setting_value(name: str, value: object) -> str:
     normalized_name = _normalize_runtime_setting_name(name)
     if normalized_name == "shell_safety_mode":
         return str(value or "")
-    if normalized_name in RUNTIME_SETTING_DEFINITIONS:
-        return "on" if bool(value) else "off"
-    raise KeyError(normalized_name)
+    return "on" if bool(value) else "off"
 
 
-def _normalize_runtime_updates(
-    updates: Mapping[str, Any],
-) -> dict[str, Any]:
-    normalized_updates: dict[str, Any] = {}
+def _normalize_runtime_updates(updates: Mapping[str, Any]) -> dict[str, Any]:
+    normalized: dict[str, Any] = {}
     for raw_name, value in updates.items():
-        if value is None:
+        if value is None or raw_name == "expected_revision":
             continue
         name = _normalize_runtime_setting_name(raw_name)
-        normalized_updates[name] = value
-    return normalized_updates
-
-
-def _normalize_runtime_defaults(
-    defaults: Mapping[str, Any],
-) -> dict[str, Any]:
-    normalized_defaults: dict[str, Any] = {}
-    for name in RUNTIME_SETTING_DEFINITIONS:
-        if name not in defaults:
-            raise KeyError(name)
-        value = defaults[name]
         if name == "shell_safety_mode":
-            normalized_defaults[name] = normalize_shell_safety_mode(str(value))
-            continue
-        if not isinstance(value, bool):
-            raise ValueError(f"{name} must be a boolean")
-        normalized_defaults[name] = value
-    return normalized_defaults
+            if not isinstance(value, str):
+                raise ValueError("shell_safety_mode must be a string")
+            normalized[name] = normalize_shell_safety_mode(value)
+        else:
+            normalized[name] = _required_bool(value, name=name)
+    return normalized
 
 
 def _normalize_runtime_setting_name(name: str) -> str:
@@ -458,43 +410,6 @@ def _normalize_runtime_setting_name(name: str) -> str:
     if normalized_name not in RUNTIME_SETTING_DEFINITIONS:
         raise KeyError(normalized_name)
     return normalized_name
-
-
-def _apply_runtime_setting(
-    coordinator: RuntimeSettingsCoordinator,
-    runtime_controls: RuntimeControls,
-    name: str,
-    value: Any,
-) -> None:
-    if name == "delegated_ack_enabled":
-        coordinator.set_delegated_ack_enabled(bool(value))
-        return
-    if name == "shell_safety_mode":
-        runtime_controls.set_shell_safety_mode(str(value))
-        return
-    if name == "file_write_enabled":
-        runtime_controls.set_file_write_enabled(bool(value))
-        return
-    if name == "cron_mutation_enabled":
-        runtime_controls.set_cron_mutation_enabled(bool(value))
-        return
-    if name == "web_private_network_enabled":
-        runtime_controls.set_web_private_network_enabled(bool(value))
-        return
-    raise KeyError(name)
-
-
-def _apply_runtime_updates_to_settings(
-    settings: RuntimeSettings,
-    updates: Mapping[str, Any],
-) -> None:
-    for name, value in updates.items():
-        settings.set_named_value(name, value)
-
-
-def _clear_runtime_override_values(settings: RuntimeSettings) -> None:
-    for name in RUNTIME_SETTING_DEFINITIONS:
-        settings.clear_named_value(name)
 
 
 def _parse_on_off_value(cleaned: str, *, name: str) -> bool:
@@ -505,13 +420,19 @@ def _parse_on_off_value(cleaned: str, *, name: str) -> bool:
     raise ValueError(f"Invalid value for {name}. Use on or off.")
 
 
-def _optional_bool(value: Any, *, name: str) -> bool | None:
-    if value is None:
-        return None
-    return _required_bool(value, name=name)
-
-
 def _required_bool(value: Any, *, name: str) -> bool:
     if isinstance(value, bool):
         return value
     raise ValueError(f"{name} must be a boolean")
+
+
+def _required_text(value: Any, *, name: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"{name} must be a non-empty string")
+    return value.strip()
+
+
+def _required_mapping(value: Any, *, name: str) -> Mapping[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValueError(f"{name} must be an object")
+    return value

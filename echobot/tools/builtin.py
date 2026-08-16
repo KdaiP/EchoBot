@@ -26,6 +26,7 @@ from .web import WebRequestTool
 
 class CurrentTimeTool(BaseTool):
     name = "get_current_time"
+    execution_mode = "parallel"
     description = "Get the current local time."
     parameters = {
         "type": "object",
@@ -49,7 +50,7 @@ def create_basic_tool_registry(
     supports_image_input: bool = True,
     memory_support: Any | None = None,
     cron_service: CronService | None = None,
-    session_name: str = "default",
+    session_id: str = "heartbeat",
     allow_file_writes: bool = True,
     allow_cron_mutations: bool = True,
     allow_private_network: bool = False,
@@ -85,7 +86,7 @@ def create_basic_tool_registry(
         tools.append(
             CronTool(
                 cron_service,
-                session_name=session_name,
+                session_id=session_id,
                 allow_mutations=allow_cron_mutations,
             )
         )

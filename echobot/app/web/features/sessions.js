@@ -1,5 +1,5 @@
 import {
-    DEFAULT_SESSION_NAME,
+    DEFAULT_SESSION_ID,
     SESSION_SYNC_POLL_INTERVAL_MS,
     audioState,
     chatState,
@@ -24,7 +24,6 @@ export function createSessionsModule(deps) {
         addSystemMessage,
         clearMessages,
         formatTimestamp,
-        normalizeSessionName,
         requestJson,
         speakText,
         setRunStatus,
@@ -52,17 +51,17 @@ export function createSessionsModule(deps) {
         };
     }
 
-    async function initializeSessionPanel(defaultSessionName) {
+    async function initializeSessionPanel(defaultSessionId) {
         sidebar.setSessionControlsBusy(true, "正在加载会话...");
 
         try {
             const sessionSummaries = await api.requestSessionSummaries();
             sidebar.applySessionSummaries(sessionSummaries);
 
-            const initialSessionName = resolveInitialSessionName(defaultSessionName, sessionSummaries);
-            const sessionDetail = initialSessionName === defaultSessionName
+            const initialSessionId = resolveInitialSessionId(defaultSessionId, sessionSummaries);
+            const sessionDetail = initialSessionId === defaultSessionId
                 ? await requestJson("/api/sessions/current")
-                : await api.switchCurrentSession(initialSessionName);
+                : await api.switchCurrentSession(initialSessionId);
 
             applySessionDetail(sessionDetail);
             sidebar.setSessionSidebarStatus("");
@@ -72,20 +71,20 @@ export function createSessionsModule(deps) {
         }
     }
 
-    function resolveInitialSessionName(defaultSessionName, sessionSummaries) {
-        const storedSessionName = String(window.localStorage.getItem("echobot.web.session") || "").trim();
-        const candidateNames = new Set((sessionSummaries || []).map((item) => item.name));
+    function resolveInitialSessionId(defaultSessionId, sessionSummaries) {
+        const storedSessionId = String(window.localStorage.getItem("echobot.web.session") || "").trim();
+        const candidateIds = new Set((sessionSummaries || []).map((item) => item.id));
 
-        if (storedSessionName && candidateNames.has(storedSessionName)) {
-            return storedSessionName;
+        if (storedSessionId && candidateIds.has(storedSessionId)) {
+            return storedSessionId;
         }
-        if (defaultSessionName && candidateNames.has(defaultSessionName)) {
-            return defaultSessionName;
+        if (defaultSessionId && candidateIds.has(defaultSessionId)) {
+            return defaultSessionId;
         }
         if (sessionSummaries && sessionSummaries.length > 0) {
-            return sessionSummaries[0].name;
+            return sessionSummaries[0].id;
         }
-        return defaultSessionName || DEFAULT_SESSION_NAME;
+        return defaultSessionId || DEFAULT_SESSION_ID;
     }
 
     async function refreshSessionList() {
@@ -126,18 +125,19 @@ export function createSessionsModule(deps) {
             || sessionState.sessionLoading
             || (
                 !options.force
-                && (chatState.chatBusy || chatState.activeChatJobId)
+                && (chatState.chatBusy || chatState.activeAgentRunId)
             )
         ) {
             return;
         }
 
-        const sessionName = normalizeSessionName(
-            options.sessionName || sessionState.currentSessionName || DEFAULT_SESSION_NAME,
-        );
+        const sessionId = options.sessionId || sessionState.currentSessionId;
+        if (!sessionId) {
+            return;
+        }
         sessionState.sessionSyncInFlight = true;
         try {
-            const sessionDetail = await api.requestSessionDetail(sessionName);
+            const sessionDetail = await api.requestSessionDetail(sessionId);
             if (
                 !options.force
                 && sessionDetail.updated_at === sessionState.currentSessionUpdatedAt
@@ -164,30 +164,30 @@ export function createSessionsModule(deps) {
         }
 
         const action = actionButton.dataset.sessionAction || "";
-        const sessionName = actionButton.dataset.sessionName || "";
-        if (!sessionName) {
+        const sessionId = actionButton.dataset.sessionId || "";
+        if (!sessionId) {
             return;
         }
 
         if (action === "switch") {
-            await switchSession(sessionName);
+            await switchSession(sessionId);
             return;
         }
         if (action === "rename") {
-            await handleRenameSession(sessionName);
+            await handleRenameSession(sessionId);
             return;
         }
         if (action === "delete") {
-            await handleDeleteSession(sessionName);
+            await handleDeleteSession(sessionId);
         }
     }
 
-    async function switchSession(sessionName) {
+    async function switchSession(sessionId) {
         if (
             chatState.chatBusy
             || sessionState.sessionLoading
-            || !sessionName
-            || sessionName === sessionState.currentSessionName
+            || !sessionId
+            || sessionId === sessionState.currentSessionId
         ) {
             return;
         }
@@ -196,10 +196,10 @@ export function createSessionsModule(deps) {
         sidebar.setSessionControlsBusy(true, "正在切换会话...");
 
         try {
-            const sessionDetail = await api.switchCurrentSession(sessionName);
+            const sessionDetail = await api.switchCurrentSession(sessionId);
             applySessionDetail(sessionDetail);
             sidebar.setSessionSidebarStatus("");
-            setRunStatus(`已切换到会话：${sessionDetail.name}`);
+            setRunStatus(`已切换到会话：${sessionDetail.title}`);
         } catch (error) {
             console.error(error);
             sidebar.setSessionSidebarStatus(error.message || "切换会话失败");
@@ -219,11 +219,11 @@ export function createSessionsModule(deps) {
             return;
         }
 
-        let sessionName = "";
+        let title = "";
         const preferredRoleName = roleState.currentRoleName || "default";
         const preferredRouteMode = normalizeRouteMode(sessionState.currentRouteMode);
         try {
-            sessionName = rawName.trim() ? normalizeSessionName(rawName) : "";
+            title = rawName.trim();
         } catch (error) {
             sidebar.setSessionSidebarStatus(error.message || "会话名不合法");
             addMessage("system", `新建会话失败：${error.message || error}`, "状态");
@@ -234,26 +234,26 @@ export function createSessionsModule(deps) {
         sidebar.setSessionControlsBusy(true, "正在创建会话...");
 
         try {
-            let sessionDetail = await api.createSession(sessionName);
+            let sessionDetail = await api.createSession(title);
             if (
                 preferredRoleName
                 && sessionDetail.role_name !== preferredRoleName
             ) {
                 sessionDetail = await api.updateSessionRole(
-                    sessionDetail.name,
+                    sessionDetail.id,
                     preferredRoleName,
                 );
             }
             if (sessionDetail.route_mode !== preferredRouteMode) {
                 sessionDetail = await api.updateSessionRouteMode(
-                    sessionDetail.name,
+                    sessionDetail.id,
                     preferredRouteMode,
                 );
             }
             sidebar.applySessionSummaries(await api.requestSessionSummaries());
             applySessionDetail(sessionDetail);
             sidebar.setSessionSidebarStatus("");
-            setRunStatus(`已新建会话：${sessionDetail.name}`);
+            setRunStatus(`已新建会话：${sessionDetail.title}`);
         } catch (error) {
             console.error(error);
             sidebar.setSessionSidebarStatus(error.message || "创建会话失败");
@@ -263,37 +263,30 @@ export function createSessionsModule(deps) {
         }
     }
 
-    async function handleRenameSession(sessionName) {
-        if (chatState.chatBusy || sessionState.sessionLoading || !sessionName) {
+    async function handleRenameSession(sessionId) {
+        if (chatState.chatBusy || sessionState.sessionLoading || !sessionId) {
             return;
         }
 
-        const rawName = window.prompt("输入新的会话名：", sessionName);
+        const current = sessionState.sessions.find((item) => item.id === sessionId);
+        const rawName = window.prompt("输入新的会话名：", current?.title || "");
         if (rawName === null) {
             return;
         }
 
-        let nextSessionName = "";
-        try {
-            nextSessionName = normalizeSessionName(rawName);
-        } catch (error) {
-            sidebar.setSessionSidebarStatus(error.message || "会话名不合法");
-            addMessage("system", `重命名会话失败：${error.message || error}`, "状态");
-            return;
-        }
-
-        if (nextSessionName === sessionName) {
+        const nextTitle = rawName.trim();
+        if (!nextTitle || nextTitle === current?.title) {
             return;
         }
 
         sidebar.setSessionControlsBusy(true, "正在重命名会话...");
 
         try {
-            const sessionDetail = await api.renameSession(sessionName, nextSessionName);
+            const sessionDetail = await api.renameSession(sessionId, nextTitle);
             sidebar.applySessionSummaries(await api.requestSessionSummaries());
             applySessionDetail(sessionDetail);
             sidebar.setSessionSidebarStatus("");
-            setRunStatus(`会话已重命名为：${sessionDetail.name}`);
+            setRunStatus(`会话已重命名为：${sessionDetail.title}`);
         } catch (error) {
             console.error(error);
             sidebar.setSessionSidebarStatus(error.message || "重命名会话失败");
@@ -303,11 +296,12 @@ export function createSessionsModule(deps) {
         }
     }
 
-    async function handleDeleteSession(sessionName) {
-        if (chatState.chatBusy || sessionState.sessionLoading || !sessionName) {
+    async function handleDeleteSession(sessionId) {
+        if (chatState.chatBusy || sessionState.sessionLoading || !sessionId) {
             return;
         }
-        if (!window.confirm(`确定删除会话“${sessionName}”吗？`)) {
+        const current = sessionState.sessions.find((item) => item.id === sessionId);
+        if (!window.confirm(`确定删除会话“${current?.title || sessionId}”吗？`)) {
             return;
         }
 
@@ -315,10 +309,10 @@ export function createSessionsModule(deps) {
         sidebar.setSessionControlsBusy(true, "正在删除会话...");
 
         try {
-            await api.deleteSession(sessionName);
+            await api.deleteSession(sessionId);
             sidebar.applySessionSummaries(await api.requestSessionSummaries());
 
-            if (sessionName === sessionState.currentSessionName) {
+            if (sessionId === sessionState.currentSessionId) {
                 const sessionDetail = await requestJson("/api/sessions/current");
                 applySessionDetail(sessionDetail);
             } else {
@@ -326,7 +320,7 @@ export function createSessionsModule(deps) {
                 sidebar.updateSessionSidebarSummary();
             }
 
-            setRunStatus(`已删除会话：${sessionName}`);
+            setRunStatus(`已删除会话：${current?.title || sessionId}`);
             sidebar.setSessionSidebarStatus("");
         } catch (error) {
             console.error(error);
@@ -338,26 +332,28 @@ export function createSessionsModule(deps) {
     }
 
     function applySessionDetail(sessionDetail, options = {}) {
-        const sessionName = normalizeSessionName(sessionDetail.name || DEFAULT_SESSION_NAME);
+        const sessionId = String(sessionDetail.id || DEFAULT_SESSION_ID).trim();
+        const sessionTitle = String(sessionDetail.title || "未命名会话").trim();
         const nextHistory = normalizeHistory(sessionDetail.history);
         const appendedMessages = shouldAnnounceNewMessages(
             options,
-            sessionName,
-            sessionState.currentSessionName,
+            sessionId,
+            sessionState.currentSessionId,
             sessionState.currentSessionHistory,
         )
             ? findAppendedMessages(sessionState.currentSessionHistory, nextHistory)
             : [];
 
         roleHooks.closeRoleEditor();
-        sessionState.currentSessionName = sessionName;
+        sessionState.currentSessionId = sessionId;
+        sessionState.currentSessionTitle = sessionTitle;
         sessionState.currentSessionUpdatedAt = String(sessionDetail.updated_at || "").trim();
         sessionState.currentSessionHistory = nextHistory;
         roleState.currentRoleName = sessionDetail.role_name || "default";
         sessionState.currentRouteMode = normalizeRouteMode(sessionDetail.route_mode);
 
-        DOM.sessionLabel.textContent = `会话: ${sessionName}`;
-        window.localStorage.setItem("echobot.web.session", sessionName);
+        DOM.sessionLabel.textContent = `会话: ${sessionTitle}`;
+        window.localStorage.setItem("echobot.web.session", sessionId);
         sidebar.syncRouteModeSelect();
 
         renderSessionHistory(nextHistory, {
@@ -396,7 +392,7 @@ export function createSessionsModule(deps) {
             !DOM.routeModeSelect
             || chatState.chatBusy
             || sessionState.sessionLoading
-            || chatState.activeChatJobId
+            || chatState.activeAgentRunId
         ) {
             sidebar.syncRouteModeSelect();
             return;
@@ -409,15 +405,13 @@ export function createSessionsModule(deps) {
             return;
         }
 
-        const sessionName = normalizeSessionName(
-            sessionState.currentSessionName || DEFAULT_SESSION_NAME,
-        );
+        const sessionId = sessionState.currentSessionId;
         DOM.routeModeSelect.disabled = true;
         setRunStatus("正在切换路由模式...");
 
         try {
             const sessionDetail = await api.updateSessionRouteMode(
-                sessionName,
+                sessionId,
                 nextRouteMode,
             );
             applySessionDetail(sessionDetail);
@@ -431,7 +425,7 @@ export function createSessionsModule(deps) {
             DOM.routeModeSelect.disabled = (
                 chatState.chatBusy
                 || sessionState.sessionLoading
-                || Boolean(chatState.activeChatJobId)
+                || Boolean(chatState.activeAgentRunId)
             );
         }
     }

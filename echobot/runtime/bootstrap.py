@@ -12,7 +12,7 @@ from ..images import DEFAULT_IMAGE_BUDGET, ImageBudget
 from ..memory import ReMeLightSettings, ReMeLightSupport
 from ..orchestration import (
     ConversationCoordinator,
-    ConversationJobStore,
+    RunStore,
     DecisionEngine,
     RoleCardRegistry,
     RoleplayEngine,
@@ -21,16 +21,24 @@ from ..providers.openai_compatible import (
     OpenAICompatibleProvider,
     OpenAICompatibleSettings,
 )
+from ..providers import (
+    LLMProvider,
+    LLMProviderConfigurationService,
+    LLMProviderManager,
+    load_optional_llm_profiles,
+)
+from ..runtime.legacy_session_migration import migrate_legacy_session_data
 from ..runtime.session_runner import SessionAgentRunner
-from ..runtime.agent_traces import AgentTraceStore
 from ..runtime.settings import (
+    AppSettings,
     DEFAULT_SHELL_SAFETY_MODE,
+    LLMSelection,
     RuntimeConfigSnapshot,
     RuntimeControls,
-    RuntimeSettings,
-    RuntimeSettingsStore,
+    SettingsService,
+    SpeechSettings,
 )
-from ..runtime.sessions import ChatSession, SessionStore
+from ..runtime.sessions import Session, SessionStore
 from ..runtime.system_prompt import build_default_system_prompt
 from ..scheduling.cron import CronService
 from ..scheduling.heartbeat import HeartbeatService
@@ -64,8 +72,7 @@ class RuntimeContext:
     supports_image_input: bool
     agent: AgentCore
     session_store: SessionStore
-    agent_session_store: SessionStore
-    session: ChatSession | None
+    session: Session | None
     tool_registry: ToolRegistry | None
     skill_registry: SkillRegistry | None
     cron_service: CronService
@@ -78,7 +85,9 @@ class RuntimeContext:
     heartbeat_interval_seconds: int
     tool_registry_factory: ToolRegistryFactory
     runtime_controls: RuntimeControls
-    default_runtime_config: RuntimeConfigSnapshot
+    settings_service: SettingsService
+    provider_manager: LLMProviderManager
+    llm_configuration: LLMProviderConfigurationService | None = None
 
 
 def build_runtime_context(
@@ -87,74 +96,102 @@ def build_runtime_context(
     load_session_state: bool,
 ) -> RuntimeContext:
     workspace = (options.workspace or Path(".")).resolve()
+    # Temporary one-shot upgrade hook. The current stores do not read old schemas.
+    migrate_legacy_session_data(workspace)
     env_file_path = _resolve_runtime_path(workspace, options.env_file)
     load_env_file(str(env_file_path))
     default_runtime_config = _default_runtime_config(options)
-    settings_store = RuntimeSettingsStore(_runtime_settings_path(workspace))
-    runtime_settings = settings_store.load()
+    llm_configuration = LLMProviderConfigurationService(workspace)
+    user_profiles = llm_configuration.runtime_profiles()
+    environment_profiles = load_optional_llm_profiles()
+    llm_profiles = {**user_profiles, **environment_profiles}
+    requested_default_provider = os.environ.get(
+        "ECHOBOT_LLM_PROVIDER",
+        "",
+    ).strip()
+    default_provider_name = (
+        requested_default_provider
+        if requested_default_provider in llm_profiles
+        else next(iter(llm_profiles), "")
+    )
+    default_settings = AppSettings(
+        revision=0,
+        runtime=default_runtime_config,
+        llm=LLMSelection(active_provider=default_provider_name),
+        speech=SpeechSettings(
+            asr_provider=os.environ.get(
+                "ECHOBOT_ASR_PROVIDER",
+                "sherpa-sense-voice",
+            ).strip()
+            or "sherpa-sense-voice",
+        ),
+    )
+    settings_service = SettingsService(workspace, defaults=default_settings)
+    app_settings = settings_service.settings
+    if app_settings.llm.active_provider not in llm_profiles:
+        app_settings = settings_service.repair_llm_provider(
+            default_provider_name
+        )
+    active_profile = llm_profiles.get(app_settings.llm.active_provider)
     runtime_controls = RuntimeControls(
-        shell_safety_mode=(
-            runtime_settings.shell_safety_mode
-            if runtime_settings.shell_safety_mode is not None
-            else default_runtime_config.shell_safety_mode
-        ),
-        file_write_enabled=(
-            runtime_settings.file_write_enabled
-            if runtime_settings.file_write_enabled is not None
-            else default_runtime_config.file_write_enabled
-        ),
-        cron_mutation_enabled=(
-            runtime_settings.cron_mutation_enabled
-            if runtime_settings.cron_mutation_enabled is not None
-            else default_runtime_config.cron_mutation_enabled
-        ),
-        web_private_network_enabled=(
-            runtime_settings.web_private_network_enabled
-            if runtime_settings.web_private_network_enabled is not None
-            else default_runtime_config.web_private_network_enabled
+        shell_safety_mode=app_settings.runtime.shell_safety_mode,
+        file_write_enabled=app_settings.runtime.file_write_enabled,
+        cron_mutation_enabled=app_settings.runtime.cron_mutation_enabled,
+        web_private_network_enabled=app_settings.runtime.web_private_network_enabled,
+        supports_image_input=(
+            active_profile.supports_image_input
+            if active_profile is not None
+            else False
         ),
     )
     configure_runtime_logging()
     lightweight_max_tokens = _env_int("ECHOBOT_LIGHTWEIGHT_MAX_TOKENS", 4096)
     agent_max_steps = _env_int("ECHOBOT_AGENT_MAX_STEPS", 50)
-    settings = OpenAICompatibleSettings.from_env()
-    supports_image_input = _env_bool("ECHOBOT_LLM_SUPPORTS_IMAGE_INPUT", True)
+    supports_image_input = (
+        active_profile.supports_image_input
+        if active_profile is not None
+        else False
+    )
     attachment_store = AttachmentStore(
         workspace / ".echobot" / "attachments",
         image_budget=_image_budget_from_env(),
         file_budget=_file_budget_from_env(),
     )
+    provider_manager = LLMProviderManager(
+        llm_profiles,
+        active_provider=app_settings.llm.active_provider,
+        attachment_store=attachment_store,
+    )
     decider_provider = _build_provider_from_env(
         prefix="DECIDER_LLM_",
-        fallback_settings=settings,
+        fallback_provider=provider_manager,
         attachment_store=attachment_store,
     )
     role_provider = _build_provider_from_env(
         prefix="ROLE_LLM_",
-        fallback_settings=settings,
+        fallback_provider=provider_manager,
         attachment_store=attachment_store,
     )
 
     memory_support = None
-    if not options.no_memory and ReMeLightSupport.is_available():
+    if (
+        active_profile is not None
+        and not options.no_memory
+        and ReMeLightSupport.is_available()
+    ):
         memory_settings = ReMeLightSettings.from_provider_settings(
             workspace,
-            settings,
+            active_profile.settings,
         )
         memory_support = ReMeLightSupport(memory_settings)
 
-    provider = OpenAICompatibleProvider(
-        settings,
-        attachment_store=attachment_store,
-    )
     cron_store_path = workspace / ".echobot" / "cron" / "jobs.json"
     heartbeat_file_path = _heartbeat_file_path(workspace)
     heartbeat_interval_seconds = _heartbeat_interval_seconds(options)
     agent = AgentCore(
-        provider,
+        provider_manager,
         system_prompt=_build_system_prompt_provider(
             workspace=workspace,
-            supports_image_input=supports_image_input,
             memory_support=memory_support,
             cron_store_path=cron_store_path,
             heartbeat_file_path=heartbeat_file_path,
@@ -164,35 +201,33 @@ def build_runtime_context(
         memory_support=memory_support,
     )
     session_store = SessionStore(workspace / ".echobot" / "sessions")
-    agent_session_store = SessionStore(workspace / ".echobot" / "agent_sessions")
-    agent_trace_store = AgentTraceStore(workspace / ".echobot" / "agent_traces")
     session = _load_session(session_store, options) if load_session_state else None
     cron_service = CronService(cron_store_path)
     tool_registry_factory = _build_tool_registry_factory(
         options,
         workspace=workspace,
         attachment_store=attachment_store,
-        supports_image_input=supports_image_input,
         memory_support=memory_support,
         cron_service=cron_service,
         runtime_controls=runtime_controls,
     )
     tool_registry = None
     if session is not None:
-        tool_registry = tool_registry_factory(session.name, False)
+        tool_registry = tool_registry_factory(session.id, False)
     skill_registry = None if options.no_skills else SkillRegistry.discover()
+    run_store = RunStore(workspace / ".echobot" / "runs")
     session_runner = SessionAgentRunner(
         agent,
-        agent_session_store,
+        session_store,
         skill_registry=skill_registry,
         tool_registry_factory=tool_registry_factory,
         default_temperature=options.temperature,
         default_max_tokens=options.max_tokens,
         default_max_steps=agent_max_steps,
-        trace_store=agent_trace_store,
+        run_store=run_store,
+        provider_scope=provider_manager.pin_active_provider,
     )
     role_registry = RoleCardRegistry.discover(project_root=workspace)
-    job_store = ConversationJobStore(workspace / ".echobot" / "jobs" / "jobs.json")
     decision_engine = DecisionEngine(
         AgentCore(decider_provider),
         max_tokens=lightweight_max_tokens,
@@ -211,20 +246,21 @@ def build_runtime_context(
         roleplay_engine=roleplay_engine,
         role_registry=role_registry,
         delegated_ack_enabled=(
-            runtime_settings.delegated_ack_enabled
-            if runtime_settings.delegated_ack_enabled is not None
-            else default_runtime_config.delegated_ack_enabled
+            app_settings.runtime.delegated_ack_enabled
         ),
-        job_store=job_store,
+        run_store=run_store,
+        provider_scope=provider_manager.pin_active_provider,
     )
     heartbeat_service = None
     if not options.no_heartbeat and _heartbeat_enabled():
         heartbeat_service = HeartbeatService(
             heartbeat_file=heartbeat_file_path,
-            provider=provider,
+            provider=provider_manager,
             interval_seconds=heartbeat_interval_seconds,
             enabled=True,
         )
+
+    settings_service.bind_runtime(coordinator, runtime_controls)
 
     return RuntimeContext(
         workspace=workspace,
@@ -232,7 +268,6 @@ def build_runtime_context(
         supports_image_input=supports_image_input,
         agent=agent,
         session_store=session_store,
-        agent_session_store=agent_session_store,
         session=session,
         tool_registry=tool_registry,
         skill_registry=skill_registry,
@@ -246,7 +281,9 @@ def build_runtime_context(
         heartbeat_interval_seconds=heartbeat_interval_seconds,
         tool_registry_factory=tool_registry_factory,
         runtime_controls=runtime_controls,
-        default_runtime_config=default_runtime_config,
+        settings_service=settings_service,
+        provider_manager=provider_manager,
+        llm_configuration=llm_configuration,
     )
 
 
@@ -255,21 +292,20 @@ def _build_tool_registry_factory(
     *,
     workspace: Path,
     attachment_store: AttachmentStore,
-    supports_image_input: bool,
     memory_support: ReMeLightSupport | None,
     cron_service: CronService,
     runtime_controls: RuntimeControls,
 ) -> ToolRegistryFactory:
-    def factory(session_name: str, scheduled_context: bool) -> ToolRegistry | None:
+    def factory(session_id: str, scheduled_context: bool) -> ToolRegistry | None:
         if options.no_tools:
             return None
         return create_basic_tool_registry(
             workspace,
             attachment_store=attachment_store,
-            supports_image_input=supports_image_input,
+            supports_image_input=runtime_controls.supports_image_input,
             memory_support=memory_support,
             cron_service=cron_service,
-            session_name=session_name,
+            session_id=session_id,
             allow_file_writes=runtime_controls.file_write_enabled,
             allow_cron_mutations=(
                 runtime_controls.cron_mutation_enabled and not scheduled_context
@@ -284,7 +320,6 @@ def _build_tool_registry_factory(
 def _build_system_prompt_provider(
     *,
     workspace: Path,
-    supports_image_input: bool,
     memory_support: ReMeLightSupport | None,
     cron_store_path: Path,
     heartbeat_file_path: Path,
@@ -294,7 +329,7 @@ def _build_system_prompt_provider(
     def provider() -> str:
         return build_default_system_prompt(
             workspace,
-            supports_image_input=supports_image_input,
+            supports_image_input=runtime_controls.supports_image_input,
             enable_project_memory=memory_support is not None,
             memory_workspace=(
                 memory_support.working_dir
@@ -317,13 +352,13 @@ def _build_system_prompt_provider(
 def _load_session(
     session_store: SessionStore,
     options: RuntimeOptions,
-) -> ChatSession:
+) -> Session:
     if options.new_session:
         return session_store.create_session(options.new_session)
 
     if options.session:
-        session = session_store.load_or_create_session(options.session)
-        session_store.set_current_session(session.name)
+        session = session_store.load_session(options.session)
+        session_store.set_current_session(session.id)
         return session
 
     return session_store.load_current_session()
@@ -353,57 +388,38 @@ def _heartbeat_enabled() -> bool:
     return raw_value not in {"0", "false", "no", "off"}
 
 
-def _delegated_ack_enabled(
-    options: RuntimeOptions,
-    *,
-    runtime_settings,
-) -> bool:
+def _delegated_ack_enabled(options: RuntimeOptions) -> bool:
     if options.delegated_ack_enabled is not None:
         return bool(options.delegated_ack_enabled)
-    if runtime_settings.delegated_ack_enabled is not None:
-        return bool(runtime_settings.delegated_ack_enabled)
     return _env_bool("ECHOBOT_DELEGATED_ACK_ENABLED", True)
 
 
-def _shell_safety_mode(runtime_settings) -> str:
-    if runtime_settings.shell_safety_mode is not None:
-        return runtime_settings.shell_safety_mode
-
+def _shell_safety_mode() -> str:
     raw_value = os.environ.get("ECHOBOT_SHELL_SAFETY_MODE", "").strip().lower()
     if raw_value:
         return raw_value
     return DEFAULT_SHELL_SAFETY_MODE
 
 
-def _file_write_enabled(runtime_settings) -> bool:
-    if runtime_settings.file_write_enabled is not None:
-        return bool(runtime_settings.file_write_enabled)
+def _file_write_enabled() -> bool:
     return _env_bool("ECHOBOT_FILE_WRITE_ENABLED", True)
 
 
-def _cron_mutation_enabled(runtime_settings) -> bool:
-    if runtime_settings.cron_mutation_enabled is not None:
-        return bool(runtime_settings.cron_mutation_enabled)
+def _cron_mutation_enabled() -> bool:
     return _env_bool("ECHOBOT_CRON_MUTATION_ENABLED", True)
 
 
-def _web_private_network_enabled(runtime_settings) -> bool:
-    if runtime_settings.web_private_network_enabled is not None:
-        return bool(runtime_settings.web_private_network_enabled)
+def _web_private_network_enabled() -> bool:
     return _env_bool("ECHOBOT_WEB_PRIVATE_NETWORK_ENABLED", False)
 
 
 def _default_runtime_config(options: RuntimeOptions) -> RuntimeConfigSnapshot:
-    runtime_settings = RuntimeSettings()
     return RuntimeConfigSnapshot(
-        delegated_ack_enabled=_delegated_ack_enabled(
-            options,
-            runtime_settings=runtime_settings,
-        ),
-        shell_safety_mode=_shell_safety_mode(runtime_settings),
-        file_write_enabled=_file_write_enabled(runtime_settings),
-        cron_mutation_enabled=_cron_mutation_enabled(runtime_settings),
-        web_private_network_enabled=_web_private_network_enabled(runtime_settings),
+        delegated_ack_enabled=_delegated_ack_enabled(options),
+        shell_safety_mode=_shell_safety_mode(),
+        file_write_enabled=_file_write_enabled(),
+        cron_mutation_enabled=_cron_mutation_enabled(),
+        web_private_network_enabled=_web_private_network_enabled(),
     )
 
 
@@ -472,25 +488,18 @@ def _resolve_runtime_path(workspace: Path, path: str | Path) -> Path:
     return workspace / resolved_path
 
 
-def _runtime_settings_path(workspace: Path) -> Path:
-    return workspace / ".echobot" / "runtime_settings.json"
-
-
 def _build_provider_from_env(
     *,
     prefix: str,
-    fallback_settings: OpenAICompatibleSettings,
+    fallback_provider: LLMProvider,
     attachment_store: AttachmentStore,
-) -> OpenAICompatibleProvider:
+) -> LLMProvider:
     if _has_provider_env(prefix):
         return OpenAICompatibleProvider(
             OpenAICompatibleSettings.from_env(prefix=prefix),
             attachment_store=attachment_store,
         )
-    return OpenAICompatibleProvider(
-        fallback_settings,
-        attachment_store=attachment_store,
-    )
+    return fallback_provider
 
 
 def _has_provider_env(prefix: str) -> bool:

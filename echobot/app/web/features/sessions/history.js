@@ -39,12 +39,12 @@ export function renderSessionHistory(history, deps) {
 
 export function shouldAnnounceNewMessages(
     options,
-    sessionName,
-    currentSessionName,
+    sessionId,
+    currentSessionId,
     currentHistory,
 ) {
     return Boolean(options && options.announceNewMessages)
-        && currentSessionName === sessionName
+        && currentSessionId === sessionId
         && Array.isArray(currentHistory)
         && currentHistory.length > 0;
 }

@@ -1,5 +1,4 @@
 import {
-    DEFAULT_SESSION_NAME,
     chatState,
     roleState,
     sessionState,
@@ -9,7 +8,6 @@ import { DOM } from "../core/dom.js";
 export function createRolesModule(deps) {
     const {
         addMessage,
-        normalizeSessionName,
         requestJson,
         setRunStatus,
     } = deps;
@@ -251,11 +249,9 @@ export function createRolesModule(deps) {
     }
 
     async function setCurrentSessionRole(roleName, options = {}) {
-        const sessionName = normalizeSessionName(
-            sessionState.currentSessionName || DEFAULT_SESSION_NAME,
-        );
+        const sessionId = sessionState.currentSessionId;
         const sessionDetail = await requestJson(
-            `/api/sessions/${encodeURIComponent(sessionName)}/role`,
+            `/api/sessions/${encodeURIComponent(sessionId)}/role`,
             {
                 method: "PUT",
                 headers: {

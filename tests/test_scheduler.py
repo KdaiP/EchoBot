@@ -57,7 +57,7 @@ class CronServiceTests(unittest.IsolatedAsyncioTestCase):
             job = await service.add_job(
                 name="demo",
                 schedule=CronSchedule(kind="every", every_seconds=60),
-                payload=CronPayload(content="hello", session_name="demo"),
+                payload=CronPayload(content="hello", session_id="demo"),
             )
 
             self.assertTrue(store_path.exists())
@@ -87,7 +87,7 @@ class CronServiceTests(unittest.IsolatedAsyncioTestCase):
                         datetime.now().astimezone() + timedelta(seconds=1)
                     ).isoformat(timespec="seconds"),
                 ),
-                payload=CronPayload(content="hello", session_name="demo"),
+                payload=CronPayload(content="hello", session_id="demo"),
                 delete_after_run=True,
             )
             await service.start()
@@ -111,7 +111,7 @@ class CronServiceTests(unittest.IsolatedAsyncioTestCase):
                         name="expired reminder",
                         enabled=True,
                         schedule=CronSchedule(kind="at", at=past_time),
-                        payload=CronPayload(content="hello", session_name="demo"),
+                        payload=CronPayload(content="hello", session_id="demo"),
                         state=CronJobState(next_run_at=None),
                         created_at=past_time,
                         updated_at=past_time,
@@ -151,7 +151,7 @@ class CronServiceTests(unittest.IsolatedAsyncioTestCase):
                         name="missed reminder",
                         enabled=True,
                         schedule=CronSchedule(kind="at", at=past_time),
-                        payload=CronPayload(content="hello", session_name="demo"),
+                        payload=CronPayload(content="hello", session_id="demo"),
                         state=CronJobState(next_run_at=None),
                         created_at=past_time,
                         updated_at=past_time,
@@ -186,7 +186,7 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
     async def test_cron_tool_adds_and_lists_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             service = CronService(Path(temp_dir) / "cron" / "jobs.json")
-            tool = CronTool(service, session_name="demo")
+            tool = CronTool(service, session_id="demo")
 
             created = await tool.run(
                 {
@@ -198,14 +198,14 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
             listed = await tool.run({"action": "list"})
 
             self.assertTrue(created["created"])
-            self.assertEqual("demo", created["job"]["session_name"])
+            self.assertEqual("demo", created["job"]["session_id"])
             self.assertEqual(1, len(listed["jobs"]))
             self.assertEqual("agent", listed["jobs"][0]["payload_kind"])
 
     async def test_cron_tool_uses_delay_seconds_for_one_time_jobs(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             service = CronService(Path(temp_dir) / "cron" / "jobs.json")
-            tool = CronTool(service, session_name="demo")
+            tool = CronTool(service, session_id="demo")
 
             created = await tool.run(
                 {
@@ -237,7 +237,7 @@ class CronToolTests(unittest.IsolatedAsyncioTestCase):
             service = CronService(Path(temp_dir) / "cron" / "jobs.json")
             tool = CronTool(
                 service,
-                session_name="demo",
+                session_id="demo",
                 allow_mutations=False,
             )
 

@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 from ..channels.types import ChannelAddress
 from ..orchestration import ConversationCoordinator
-from ..runtime.settings import RuntimeControls
-from ..runtime.session_service import SessionService
+from ..runtime.settings import SettingsService
+from ..runtime.session_service import SessionLifecycleService
 from .dispatcher import BoundTextCommand, CommandResult, dispatch_text_command
 from .help import (
     HelpCommand,
@@ -40,17 +39,15 @@ if TYPE_CHECKING:
 @dataclass(slots=True)
 class CliCommandContext:
     coordinator: ConversationCoordinator
-    runtime_controls: RuntimeControls
-    workspace: Path
-    session_service: SessionService
-    session_name: str
+    settings_service: SettingsService
+    session_service: SessionLifecycleService
+    session_id: str
 
 
 @dataclass(slots=True)
 class GatewayCommandContext:
     coordinator: ConversationCoordinator
-    runtime_controls: RuntimeControls
-    workspace: Path
+    settings_service: SettingsService
     session_service: GatewaySessionService
     route_key: str
     address: ChannelAddress
@@ -76,13 +73,13 @@ async def _execute_cli_saved_session(
     command_obj: object,
 ) -> CommandResult:
     command = cast(SavedSessionCommand, command_obj)
-    current_session = await context.coordinator.load_session(context.session_name)
+    current_session = await context.coordinator.load_session(context.session_id)
     result = await execute_saved_session_command(
         session_service=context.session_service,
         current_session=current_session,
         command=command,
     )
-    context.session_name = result.session.name
+    context.session_id = result.session.id
     return CommandResult.from_lines(result.lines)
 
 
@@ -102,9 +99,7 @@ async def _execute_cli_runtime(
     command = cast(RuntimeCommand, command_obj)
     return CommandResult(
         text=await execute_runtime_command(
-            context.coordinator,
-            context.runtime_controls,
-            context.workspace,
+            context.settings_service,
             command,
         )
     )
@@ -118,7 +113,7 @@ async def _execute_cli_role(
     try:
         text = await execute_role_command(
             context.coordinator,
-            context.session_name,
+            context.session_id,
             command,
         )
     except ValueError as exc:
@@ -134,7 +129,7 @@ async def _execute_cli_route_mode(
     return CommandResult(
         text=await execute_route_mode_command(
             context.coordinator,
-            context.session_name,
+            context.session_id,
             command,
         )
     )
@@ -145,11 +140,11 @@ async def _execute_gateway_role(
     command_obj: object,
 ) -> CommandResult:
     command = cast(RoleCommand, command_obj)
-    session_name = await _gateway_session_name(context)
+    session_id = await _gateway_session_id(context)
     try:
         text = await execute_role_command(
             context.coordinator,
-            session_name,
+            session_id,
             command,
         )
     except ValueError as exc:
@@ -171,11 +166,11 @@ async def _execute_gateway_route_mode(
     command_obj: object,
 ) -> CommandResult:
     command = cast(RouteModeCommand, command_obj)
-    session_name = await _gateway_session_name(context)
+    session_id = await _gateway_session_id(context)
     return CommandResult(
         text=await execute_route_mode_command(
             context.coordinator,
-            session_name,
+            session_id,
             command,
         )
     )
@@ -186,12 +181,10 @@ async def _execute_gateway_runtime(
     command_obj: object,
 ) -> CommandResult:
     command = cast(RuntimeCommand, command_obj)
-    await _gateway_session_name(context)
+    await _gateway_session_id(context)
     return CommandResult(
         text=await execute_runtime_command(
-            context.coordinator,
-            context.runtime_controls,
-            context.workspace,
+            context.settings_service,
             command,
         )
     )
@@ -213,14 +206,14 @@ async def _execute_gateway_route_session(
     )
 
 
-async def _gateway_session_name(context: GatewayCommandContext) -> str:
-    current = await context.session_service.current_route_session(context.route_key)
+async def _gateway_session_id(context: GatewayCommandContext) -> str:
+    current = await context.session_service.current_routed_session(context.route_key)
     await context.session_service.remember_delivery_target(
-        current.session_name,
+        current.session_id,
         context.address,
         context.metadata,
     )
-    return current.session_name
+    return current.session_id
 
 
 _CLI_COMMAND_HANDLERS: tuple[BoundTextCommand[CliCommandContext], ...] = (

@@ -34,7 +34,7 @@ export function createSessionSidebarController(deps) {
             DOM.routeModeSelect.disabled = (
                 isBusy
                 || chatState.chatBusy
-                || Boolean(chatState.activeChatJobId)
+                || Boolean(chatState.activeAgentRunId)
             );
         }
 
@@ -61,8 +61,8 @@ export function createSessionSidebarController(deps) {
             return;
         }
 
-        const currentSessionName = sessionState.currentSessionName || sessionState.sessions[0].name;
-        DOM.sessionSidebarSummary.textContent = `共 ${sessionState.sessions.length} 个会话 · 当前会话：${currentSessionName}`;
+        const currentTitle = sessionState.currentSessionTitle || sessionState.sessions[0].title;
+        DOM.sessionSidebarSummary.textContent = `共 ${sessionState.sessions.length} 个会话 · 当前会话：${currentTitle}`;
     }
 
     function renderSessionList(sessionSummaries) {
@@ -85,7 +85,7 @@ export function createSessionSidebarController(deps) {
     }
 
     function buildSessionCard(sessionSummary) {
-        const isActive = sessionSummary.name === sessionState.currentSessionName;
+        const isActive = sessionSummary.id === sessionState.currentSessionId;
         const container = document.createElement("article");
         container.className = isActive ? "session-card session-card-active" : "session-card";
 
@@ -93,7 +93,7 @@ export function createSessionSidebarController(deps) {
         mainButton.type = "button";
         mainButton.className = "session-card-main";
         mainButton.dataset.sessionAction = "switch";
-        mainButton.dataset.sessionName = sessionSummary.name;
+        mainButton.dataset.sessionId = sessionSummary.id;
         mainButton.disabled = chatState.chatBusy || sessionState.sessionLoading || isActive;
 
         const header = document.createElement("div");
@@ -101,7 +101,7 @@ export function createSessionSidebarController(deps) {
 
         const title = document.createElement("p");
         title.className = "session-card-title";
-        title.textContent = sessionSummary.name;
+        title.textContent = sessionSummary.title;
 
         const count = document.createElement("span");
         count.className = "session-card-count";
@@ -118,9 +118,9 @@ export function createSessionSidebarController(deps) {
 
         const actions = document.createElement("div");
         actions.className = "session-card-actions";
-        actions.appendChild(buildSessionActionButton("重命名", "rename", sessionSummary.name));
+        actions.appendChild(buildSessionActionButton("重命名", "rename", sessionSummary.id));
         actions.appendChild(
-            buildSessionActionButton("删除", "delete", sessionSummary.name, {
+            buildSessionActionButton("删除", "delete", sessionSummary.id, {
                 danger: true,
             }),
         );
@@ -130,7 +130,7 @@ export function createSessionSidebarController(deps) {
         return container;
     }
 
-    function buildSessionActionButton(label, action, sessionName, options = {}) {
+    function buildSessionActionButton(label, action, sessionId, options = {}) {
         const button = document.createElement("button");
         button.type = "button";
         button.className = options.danger
@@ -138,7 +138,7 @@ export function createSessionSidebarController(deps) {
             : "session-card-action";
         button.textContent = label;
         button.dataset.sessionAction = action;
-        button.dataset.sessionName = sessionName;
+        button.dataset.sessionId = sessionId;
         button.disabled = chatState.chatBusy || sessionState.sessionLoading;
         return button;
     }

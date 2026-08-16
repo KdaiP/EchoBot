@@ -4,7 +4,7 @@ import json
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from ..models import (
     LLMMessage,
@@ -19,6 +19,7 @@ from ..models import (
 
 
 ToolPayload = str | int | float | bool | None | dict[str, Any] | list[Any]
+ToolExecutionMode = Literal["sequential", "parallel"]
 
 
 @dataclass(slots=True)
@@ -70,6 +71,7 @@ class BaseTool(ABC):
     name: str
     description: str
     parameters: dict[str, Any]
+    execution_mode: ToolExecutionMode = "sequential"
 
     def to_llm_tool(self) -> LLMTool:
         return LLMTool(
@@ -103,6 +105,10 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return list(self._tools)
 
+    def execution_mode(self, name: str) -> ToolExecutionMode:
+        tool = self.get(name)
+        return tool.execution_mode if tool is not None else "sequential"
+
     def copy(self) -> "ToolRegistry":
         return ToolRegistry(list(self._tools.values()))
 
@@ -116,17 +122,17 @@ class ToolRegistry:
     async def execute(self, tool_call: ToolCall) -> ToolResult:
         tool = self.get(tool_call.name)
         if tool is None:
-            return self._error_result(tool_call, f"Tool not found: {tool_call.name}")
+            return self.error_result(tool_call, f"Tool not found: {tool_call.name}")
 
         try:
             arguments = _parse_arguments(tool_call.arguments)
         except ValueError as exc:
-            return self._error_result(tool_call, str(exc))
+            return self.error_result(tool_call, str(exc))
 
         try:
             output = await tool.run(arguments)
         except Exception as exc:
-            return self._error_result(tool_call, str(exc))
+            return self.error_result(tool_call, str(exc))
 
         execution_output = _normalize_execution_output(output)
         return ToolResult(
@@ -139,20 +145,7 @@ class ToolRegistry:
             control=execution_output.control,
         )
 
-    async def execute_tool_calls(
-        self,
-        tool_calls: Sequence[ToolCall],
-    ) -> list[ToolResult]:
-        results: list[ToolResult] = []
-        for tool_call in tool_calls:
-            result = await self.execute(tool_call)
-            results.append(result)
-            if result.control is not None:
-                break
-
-        return results
-
-    def _error_result(self, tool_call: ToolCall, message: str) -> ToolResult:
+    def error_result(self, tool_call: ToolCall, message: str) -> ToolResult:
         return ToolResult(
             call_id=tool_call.id,
             tool_name=tool_call.name,

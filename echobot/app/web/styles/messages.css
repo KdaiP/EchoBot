@@ -245,6 +245,89 @@
     box-shadow: 0 0 0 4px rgba(202, 92, 54, 0.08);
 }
 
+.message-system.message-error {
+    align-self: flex-start;
+    width: min(100%, 640px);
+    text-align: left;
+}
+
+.message-system.message-error .message-text {
+    display: block;
+    width: 100%;
+    max-width: none;
+    padding: 0;
+    border: 0;
+    border-radius: 18px;
+    background: transparent;
+    box-shadow: none;
+}
+
+.message-system.message-error .message-text::before {
+    display: none;
+}
+
+.message-error-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
+    border: 1px solid rgba(166, 61, 42, 0.18);
+    border-radius: 18px;
+    background: linear-gradient(135deg, rgba(255, 248, 245, 0.98), rgba(255, 241, 235, 0.94));
+    color: var(--text);
+    box-shadow: 0 10px 24px rgba(117, 48, 30, 0.07);
+}
+
+.message-error-icon {
+    display: inline-flex;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    margin-top: 1px;
+    border-radius: 50%;
+    background: rgba(190, 66, 42, 0.12);
+    color: #a63d2a;
+    font-size: 0.82rem;
+    font-weight: 800;
+}
+
+.message-error-main {
+    flex: 1;
+    min-width: 0;
+}
+
+.message-error-title {
+    display: block;
+    color: #87341f;
+    font-size: 0.94rem;
+    line-height: 1.45;
+}
+
+.message-error-summary {
+    margin: 3px 0 0;
+    color: var(--muted);
+    font-size: 0.86rem;
+    line-height: 1.55;
+}
+
+.message-error-detail {
+    max-height: 180px;
+    margin-top: 9px;
+    margin-bottom: 0;
+    overflow: auto;
+    padding: 10px 12px;
+    border-radius: 12px;
+    background: rgba(78, 42, 31, 0.06);
+    color: var(--muted);
+    font-family: "Cascadia Code", "Consolas", monospace;
+    font-size: 0.76rem;
+    line-height: 1.55;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
 .messages-header {
     justify-content: space-between;
     flex-wrap: wrap;

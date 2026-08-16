@@ -14,6 +14,8 @@ from .base import BaseTool, ToolOutput
 
 
 class WebRequestTool(BaseTool):
+    execution_mode = "parallel"
+
     def __init__(
         self,
         *,

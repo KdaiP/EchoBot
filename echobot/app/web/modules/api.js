@@ -88,17 +88,17 @@ export async function requestChatStream(payload, handlers) {
     return finalPayload;
 }
 
-export async function requestChatJob(jobId) {
-    return await requestJson(`/api/chat/jobs/${encodeURIComponent(jobId)}`);
+export async function requestAgentRun(runId) {
+    return await requestJson(`/api/chat/runs/${encodeURIComponent(runId)}`);
 }
 
-export async function requestChatJobTrace(jobId) {
-    return await requestJson(`/api/chat/jobs/${encodeURIComponent(jobId)}/trace`);
+export async function requestAgentRunEvents(runId) {
+    return await requestJson(`/api/chat/runs/${encodeURIComponent(runId)}/events`);
 }
 
-export async function cancelChatJob(jobId) {
+export async function cancelAgentRun(runId) {
     return await requestJson(
-        `/api/chat/jobs/${encodeURIComponent(jobId)}/cancel`,
+        `/api/chat/runs/${encodeURIComponent(runId)}/cancel`,
         {
             method: "POST",
         },

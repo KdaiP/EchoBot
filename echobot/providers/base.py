@@ -24,15 +24,11 @@ class LLMProvider(ABC):
         self,
         messages: Sequence[LLMMessage],
         *,
-        tools: Sequence[LLMTool] | None = None,
-        tool_choice: str | dict[str, Any] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncIterator[str]:
         response = await self.generate(
             messages,
-            tools=tools,
-            tool_choice=tool_choice,
             temperature=temperature,
             max_tokens=max_tokens,
         )

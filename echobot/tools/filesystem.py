@@ -46,6 +46,7 @@ class WritableWorkspaceTool(WorkspaceTool):
 
 class ListDirectoryTool(WorkspaceTool):
     name = "list_directory"
+    execution_mode = "parallel"
     description = "List files and folders under the workspace."
     parameters = {
         "type": "object",
@@ -88,6 +89,7 @@ class ListDirectoryTool(WorkspaceTool):
 
 class ReadTextFileTool(WorkspaceTool):
     name = "read_text_file"
+    execution_mode = "parallel"
     description = "Read a UTF-8 text file from the workspace."
     parameters = {
         "type": "object",
@@ -203,6 +205,7 @@ class WriteTextFileTool(WritableWorkspaceTool):
 
 class SearchFilesTool(WorkspaceTool):
     name = "search_files"
+    execution_mode = "parallel"
     description = "Find files and folders in the workspace using a glob-style pattern."
     parameters = {
         "type": "object",
@@ -302,6 +305,7 @@ class SearchFilesTool(WorkspaceTool):
 
 class SearchTextInFilesTool(WorkspaceTool):
     name = "search_text_in_files"
+    execution_mode = "parallel"
     description = "Search UTF-8 text files in the workspace for matching text."
     parameters = {
         "type": "object",

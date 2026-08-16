@@ -71,7 +71,7 @@ def resolve_file_attachment_route_mode(
 def has_file_processing_capability(
     skill_registry,
     tool_registry_factory,
-    session_name: str,
+    session_id: str,
 ) -> bool:
     if skill_registry is not None and skill_registry.has_skills():
         return True
@@ -79,7 +79,7 @@ def has_file_processing_capability(
     if not callable(tool_registry_factory):
         return False
 
-    tool_registry = tool_registry_factory(session_name, False)
+    tool_registry = tool_registry_factory(session_id, False)
     return tool_registry is not None and bool(tool_registry.names())
 
 

@@ -19,15 +19,15 @@ def build_cron_job_executor(
     async def execute(job: CronJob) -> str | None:
         if job.payload.kind == "text":
             await session_runner.append_assistant_message(
-                job.payload.session_name,
+                job.payload.session_id,
                 job.payload.content,
             )
             visible_content = await coordinator.present_scheduled_notification(
-                job.payload.session_name,
+                job.payload.session_id,
                 job.payload.content,
             )
             await notify(
-                job.payload.session_name,
+                job.payload.session_id,
                 "cron",
                 job.name,
                 visible_content,
@@ -35,7 +35,7 @@ def build_cron_job_executor(
             return visible_content
 
         execution = await session_runner.run_prompt(
-            job.payload.session_name,
+            job.payload.session_id,
             job.payload.content,
             scheduled_context=True,
         )
@@ -44,11 +44,11 @@ def build_cron_job_executor(
         ).strip()
         if raw_content:
             visible_content = await coordinator.present_scheduled_notification(
-                job.payload.session_name,
+                job.payload.session_id,
                 raw_content,
             )
             await notify(
-                job.payload.session_name,
+                job.payload.session_id,
                 "cron",
                 job.name,
                 visible_content,

@@ -15,7 +15,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from echobot import AgentCore, AgentTraceStore, LLMMessage, LLMResponse
+from echobot import AgentCore, LLMMessage, LLMResponse
 from echobot.attachments import AttachmentStore
 from echobot.asr import ASRStatusSnapshot, ProviderStatusSnapshot, TranscriptionResult
 from echobot.app import create_app
@@ -25,14 +25,24 @@ from echobot.orchestration import (
     DecisionEngine,
     RoleCardRegistry,
     RoleplayEngine,
+    RunStore,
 )
-from echobot.providers.base import LLMProvider
+from echobot.providers import (
+    LLMProfile,
+    LLMProviderConfigurationService,
+    LLMProvider,
+    LLMProviderManager,
+    OpenAICompatibleSettings,
+)
 from echobot.runtime.bootstrap import RuntimeContext, RuntimeOptions
 from echobot.runtime.settings import (
     DEFAULT_SHELL_SAFETY_MODE,
+    AppSettings,
+    LLMSelection,
     RuntimeConfigSnapshot,
     RuntimeControls,
-    RuntimeSettingsStore,
+    SettingsService,
+    SpeechSettings,
 )
 from echobot.runtime.session_runner import SessionAgentRunner
 from echobot.runtime.sessions import SessionStore
@@ -339,16 +349,30 @@ class FakeASRService:
         self.selected_asr_provider = normalized_name
 
 
+def _create_test_sessions(session_store: SessionStore) -> None:
+    for session_id in [
+        "demo",
+        "files",
+        "vision",
+        "vision-off",
+        "wrong-kind",
+        "structured",
+        "team",
+        "default",
+    ]:
+        session_store.create_session(session_id, session_id=session_id)
+
+
 def build_test_context(options: RuntimeOptions) -> RuntimeContext:
     workspace = (options.workspace or Path(".")).resolve()
     agent = AgentCore(FakeProvider())
     session_store = SessionStore(workspace / ".echobot" / "sessions")
-    agent_session_store = SessionStore(workspace / ".echobot" / "agent_sessions")
-    trace_store = AgentTraceStore(workspace / ".echobot" / "agent_traces")
+    _create_test_sessions(session_store)
+    run_store = RunStore(workspace / ".echobot" / "runs")
     session_runner = SessionAgentRunner(
         agent,
-        agent_session_store,
-        trace_store=trace_store,
+        session_store,
+        run_store=run_store,
     )
     role_registry = RoleCardRegistry.discover(project_root=workspace)
     coordinator = ConversationCoordinator(
@@ -358,6 +382,7 @@ def build_test_context(options: RuntimeOptions) -> RuntimeContext:
         roleplay_engine=RoleplayEngine(AgentCore(FakeProvider()), role_registry),
         role_registry=role_registry,
         delegated_ack_enabled=_delegated_ack_enabled(options),
+        run_store=run_store,
     )
     heartbeat_service = None
     if not options.no_heartbeat:
@@ -366,13 +391,14 @@ def build_test_context(options: RuntimeOptions) -> RuntimeContext:
             provider=FakeProvider(),
             interval_seconds=60,
         )
+    runtime_controls = RuntimeControls()
+    settings_service = _settings_service(options, coordinator, runtime_controls)
     return RuntimeContext(
         workspace=workspace,
         attachment_store=AttachmentStore(workspace / ".echobot" / "attachments"),
         supports_image_input=True,
         agent=agent,
         session_store=session_store,
-        agent_session_store=agent_session_store,
         session=None,
         tool_registry=None,
         skill_registry=None,
@@ -385,8 +411,10 @@ def build_test_context(options: RuntimeOptions) -> RuntimeContext:
         heartbeat_file_path=workspace / ".echobot" / "HEARTBEAT.md",
         heartbeat_interval_seconds=60,
         tool_registry_factory=lambda *_args: None,
-        runtime_controls=_runtime_controls(options),
-        default_runtime_config=_default_runtime_config(options),
+        runtime_controls=runtime_controls,
+        settings_service=settings_service,
+        provider_manager=_test_provider_manager(workspace),
+        llm_configuration=LLMProviderConfigurationService(workspace),
     )
 
 
@@ -394,12 +422,12 @@ def build_slow_agent_test_context(options: RuntimeOptions) -> RuntimeContext:
     workspace = (options.workspace or Path(".")).resolve()
     agent = AgentCore(SlowAgentProvider())
     session_store = SessionStore(workspace / ".echobot" / "sessions")
-    agent_session_store = SessionStore(workspace / ".echobot" / "agent_sessions")
-    trace_store = AgentTraceStore(workspace / ".echobot" / "agent_traces")
+    _create_test_sessions(session_store)
+    run_store = RunStore(workspace / ".echobot" / "runs")
     session_runner = SessionAgentRunner(
         agent,
-        agent_session_store,
-        trace_store=trace_store,
+        session_store,
+        run_store=run_store,
     )
     role_registry = RoleCardRegistry.discover(project_root=workspace)
     coordinator = ConversationCoordinator(
@@ -409,6 +437,7 @@ def build_slow_agent_test_context(options: RuntimeOptions) -> RuntimeContext:
         roleplay_engine=RoleplayEngine(AgentCore(FakeProvider()), role_registry),
         role_registry=role_registry,
         delegated_ack_enabled=_delegated_ack_enabled(options),
+        run_store=run_store,
     )
     heartbeat_service = None
     if not options.no_heartbeat:
@@ -417,13 +446,14 @@ def build_slow_agent_test_context(options: RuntimeOptions) -> RuntimeContext:
             provider=FakeProvider(),
             interval_seconds=60,
         )
+    runtime_controls = RuntimeControls()
+    settings_service = _settings_service(options, coordinator, runtime_controls)
     return RuntimeContext(
         workspace=workspace,
         attachment_store=AttachmentStore(workspace / ".echobot" / "attachments"),
         supports_image_input=True,
         agent=agent,
         session_store=session_store,
-        agent_session_store=agent_session_store,
         session=None,
         tool_registry=None,
         skill_registry=None,
@@ -436,8 +466,9 @@ def build_slow_agent_test_context(options: RuntimeOptions) -> RuntimeContext:
         heartbeat_file_path=workspace / ".echobot" / "HEARTBEAT.md",
         heartbeat_interval_seconds=60,
         tool_registry_factory=lambda *_args: None,
-        runtime_controls=_runtime_controls(options),
-        default_runtime_config=_default_runtime_config(options),
+        runtime_controls=runtime_controls,
+        settings_service=settings_service,
+        provider_manager=_test_provider_manager(workspace),
     )
 
 
@@ -445,12 +476,12 @@ def build_slow_ack_test_context(options: RuntimeOptions) -> RuntimeContext:
     workspace = (options.workspace or Path(".")).resolve()
     agent = AgentCore(FakeProvider())
     session_store = SessionStore(workspace / ".echobot" / "sessions")
-    agent_session_store = SessionStore(workspace / ".echobot" / "agent_sessions")
-    trace_store = AgentTraceStore(workspace / ".echobot" / "agent_traces")
+    _create_test_sessions(session_store)
+    run_store = RunStore(workspace / ".echobot" / "runs")
     session_runner = SessionAgentRunner(
         agent,
-        agent_session_store,
-        trace_store=trace_store,
+        session_store,
+        run_store=run_store,
     )
     role_registry = RoleCardRegistry.discover(project_root=workspace)
     coordinator = ConversationCoordinator(
@@ -460,6 +491,7 @@ def build_slow_ack_test_context(options: RuntimeOptions) -> RuntimeContext:
         roleplay_engine=RoleplayEngine(AgentCore(SlowAckProvider()), role_registry),
         role_registry=role_registry,
         delegated_ack_enabled=_delegated_ack_enabled(options),
+        run_store=run_store,
     )
     heartbeat_service = None
     if not options.no_heartbeat:
@@ -468,13 +500,14 @@ def build_slow_ack_test_context(options: RuntimeOptions) -> RuntimeContext:
             provider=FakeProvider(),
             interval_seconds=60,
         )
+    runtime_controls = RuntimeControls()
+    settings_service = _settings_service(options, coordinator, runtime_controls)
     return RuntimeContext(
         workspace=workspace,
         attachment_store=AttachmentStore(workspace / ".echobot" / "attachments"),
         supports_image_input=True,
         agent=agent,
         session_store=session_store,
-        agent_session_store=agent_session_store,
         session=None,
         tool_registry=None,
         skill_registry=None,
@@ -487,8 +520,9 @@ def build_slow_ack_test_context(options: RuntimeOptions) -> RuntimeContext:
         heartbeat_file_path=workspace / ".echobot" / "HEARTBEAT.md",
         heartbeat_interval_seconds=60,
         tool_registry_factory=lambda *_args: None,
-        runtime_controls=_runtime_controls(options),
-        default_runtime_config=_default_runtime_config(options),
+        runtime_controls=runtime_controls,
+        settings_service=settings_service,
+        provider_manager=_test_provider_manager(workspace),
     )
 
 
@@ -507,39 +541,8 @@ def build_test_asr_service(_workspace: Path) -> FakeASRService:
 
 
 def _delegated_ack_enabled(options: RuntimeOptions) -> bool:
-    if options.delegated_ack_enabled is None:
-        store = RuntimeSettingsStore(
-            (options.workspace or Path(".")).resolve()
-            / ".echobot"
-            / "runtime_settings.json",
-        )
-        return store.load().delegated_ack_enabled is not False
-    return bool(options.delegated_ack_enabled)
-
-
-def _runtime_controls(options: RuntimeOptions) -> RuntimeControls:
-    store = RuntimeSettingsStore(
-        (options.workspace or Path(".")).resolve()
-        / ".echobot"
-        / "runtime_settings.json",
-    )
-    settings = store.load()
-    shell_safety_mode = settings.shell_safety_mode or DEFAULT_SHELL_SAFETY_MODE
-    return RuntimeControls(
-        shell_safety_mode=shell_safety_mode,
-        file_write_enabled=(
-            True if settings.file_write_enabled is None else settings.file_write_enabled
-        ),
-        cron_mutation_enabled=(
-            True
-            if settings.cron_mutation_enabled is None
-            else settings.cron_mutation_enabled
-        ),
-        web_private_network_enabled=(
-            False
-            if settings.web_private_network_enabled is None
-            else settings.web_private_network_enabled
-        ),
+    return True if options.delegated_ack_enabled is None else bool(
+        options.delegated_ack_enabled
     )
 
 
@@ -554,6 +557,47 @@ def _default_runtime_config(options: RuntimeOptions) -> RuntimeConfigSnapshot:
         file_write_enabled=True,
         cron_mutation_enabled=True,
         web_private_network_enabled=False,
+    )
+
+
+def _settings_service(
+    options: RuntimeOptions,
+    coordinator: ConversationCoordinator,
+    runtime_controls: RuntimeControls,
+) -> SettingsService:
+    workspace = (options.workspace or Path(".")).resolve()
+    service = SettingsService(
+        workspace,
+        defaults=AppSettings(
+            revision=0,
+            runtime=_default_runtime_config(options),
+            llm=LLMSelection(active_provider="default"),
+            speech=SpeechSettings(asr_provider="fake-asr"),
+        ),
+    )
+    service.bind_runtime(coordinator, runtime_controls)
+    return service
+
+
+def _test_provider_manager(workspace: Path) -> LLMProviderManager:
+    def profile(name: str, model: str) -> LLMProfile:
+        return LLMProfile(
+            name=name,
+            label=name.title(),
+            settings=OpenAICompatibleSettings(
+                api_key="test-key",
+                model=model,
+                base_url="https://example.com/v1",
+            ),
+        )
+
+    return LLMProviderManager(
+        {
+            "default": profile("default", "test-model"),
+            "backup": profile("backup", "backup-model"),
+        },
+        active_provider="default",
+        attachment_store=AttachmentStore(workspace / ".echobot" / "attachments"),
     )
 
 
@@ -886,7 +930,7 @@ def write_test_cron_jobs(workspace: Path) -> None:
                 payload=CronPayload(
                     kind="agent",
                     content="Summarize today's priorities",
-                    session_name="default",
+                    session_id="default",
                 ),
                 state=CronJobState(
                     next_run_at="2030-01-01T09:00:00+08:00",
@@ -904,7 +948,7 @@ def write_test_cron_jobs(workspace: Path) -> None:
                 payload=CronPayload(
                     kind="text",
                     content="Standup time",
-                    session_name="team",
+                    session_id="team",
                 ),
                 state=CronJobState(
                     last_run_at="2030-01-01T07:55:00+08:00",
@@ -952,7 +996,8 @@ class AppApiTests(unittest.TestCase):
 
             self.assertEqual(200, health.status_code)
             self.assertEqual("ok", health.json()["status"])
-            self.assertEqual("default", health.json()["current_session"])
+            self.assertEqual("default", health.json()["current_session_id"])
+            self.assertEqual("default", health.json()["current_session_title"])
             self.assertEqual("default", health.json()["current_role"])
             self.assertEqual(200, definitions.status_code)
             self.assertEqual(["console", "telegram", "qq"], [item["name"] for item in definitions.json()])
@@ -977,28 +1022,29 @@ class AppApiTests(unittest.TestCase):
             )
 
             with TestClient(app) as client:
-                created = client.post("/api/sessions", json={"name": "demo"})
+                created = client.post("/api/sessions", json={"title": "Shared chat"})
+                session_id = created.json()["id"]
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "demo",
+                        "session_id": session_id,
                         "prompt": "ping",
                     },
                 )
                 current = client.get("/api/sessions/current")
-                detail = client.get("/api/sessions/demo")
+                detail = client.get(f"/api/sessions/{session_id}")
 
             self.assertEqual(200, created.status_code)
-            self.assertEqual("demo", created.json()["name"])
+            self.assertEqual("Shared chat", created.json()["title"])
             self.assertEqual(200, replied.status_code)
-            self.assertEqual("demo", replied.json()["session_name"])
+            self.assertEqual(session_id, replied.json()["session_id"])
             self.assertEqual("pong", replied.json()["response"])
             self.assertEqual("pong", replied.json()["response_content"])
             self.assertFalse(replied.json()["delegated"])
             self.assertTrue(replied.json()["completed"])
             self.assertEqual("default", replied.json()["role_name"])
             self.assertEqual(200, current.status_code)
-            self.assertEqual("demo", current.json()["name"])
+            self.assertEqual(session_id, current.json()["id"])
             self.assertEqual(200, detail.status_code)
             self.assertEqual("default", detail.json()["role_name"])
             self.assertEqual("auto", detail.json()["route_mode"])
@@ -1035,7 +1081,7 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "vision",
+                        "session_id": "vision",
                         "prompt": "",
                         "images": [
                             {
@@ -1091,7 +1137,7 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "vision-off",
+                        "session_id": "vision-off",
                         "prompt": "",
                         "images": [
                             {
@@ -1125,7 +1171,7 @@ class AppApiTests(unittest.TestCase):
 
             with TestClient(app) as client:
                 runtime = client.app.state.runtime
-                session = runtime.context.session_store.load_or_create_session("demo")
+                session = runtime.context.session_store.load_session("demo")
 
                 async def fake_run_prompt(*args, **kwargs):
                     del args, kwargs
@@ -1151,18 +1197,18 @@ class AppApiTests(unittest.TestCase):
                         ],
                         delegated=False,
                         completed=True,
-                        job_id=None,
+                        run_id=None,
                         status="completed",
                         role_name="default",
                         steps=1,
-                        compressed_summary="",
+                        agent_summary="",
                     )
 
                 runtime.chat_service.run_prompt = fake_run_prompt
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "send the report",
                     },
                 )
@@ -1205,7 +1251,7 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "files",
+                        "session_id": "files",
                         "prompt": "帮我看看这个文件是做什么的",
                         "files": [
                             {
@@ -1278,7 +1324,7 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "wrong-kind",
+                        "session_id": "wrong-kind",
                         "prompt": "",
                         "images": [
                             {
@@ -1329,7 +1375,7 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "default",
+                        "session_id": "default",
                         "prompt": "Please set a cron reminder",
                         "files": [
                             {
@@ -1371,14 +1417,14 @@ class AppApiTests(unittest.TestCase):
                 direct_reply = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "default",
+                        "session_id": "default",
                         "prompt": "Please set a cron reminder",
                     },
                 )
                 forced_reply = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "default",
+                        "session_id": "default",
                         "prompt": "ping",
                         "route_mode": "force_agent",
                     },
@@ -1397,7 +1443,7 @@ class AppApiTests(unittest.TestCase):
             self.assertTrue(forced_reply.json()["delegated"])
             self.assertFalse(forced_reply.json()["completed"])
             self.assertEqual("working", forced_reply.json()["response"])
-            self.assertTrue(forced_reply.json()["job_id"])
+            self.assertTrue(forced_reply.json()["run_id"])
 
             self.assertEqual(200, detail.status_code)
             self.assertEqual("chat_only", detail.json()["route_mode"])
@@ -1436,7 +1482,7 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "default",
+                        "session_id": "default",
                         "prompt": "ping",
                     },
                 )
@@ -1487,34 +1533,35 @@ class AppApiTests(unittest.TestCase):
                 context_builder=build_test_context,
             )
 
-            created_name = "项目讨论"
-            renamed_name = "二号会话"
+            created_title = "项目讨论"
+            renamed_title = "二号会话"
 
             with TestClient(app) as client:
-                created = client.post("/api/sessions", json={"name": created_name})
+                created = client.post("/api/sessions", json={"title": created_title})
+                session_id = created.json()["id"]
                 current = client.get("/api/sessions/current")
-                detail = client.get(f"/api/sessions/{quote(created_name, safe='')}")
+                detail = client.get(f"/api/sessions/{session_id}")
                 renamed = client.patch(
-                    f"/api/sessions/{quote(created_name, safe='')}",
-                    json={"name": renamed_name},
+                    f"/api/sessions/{session_id}",
+                    json={"title": renamed_title},
                 )
-                renamed_detail = client.get(f"/api/sessions/{quote(renamed_name, safe='')}")
+                renamed_detail = client.get(f"/api/sessions/{session_id}")
 
             self.assertEqual(200, created.status_code)
-            self.assertEqual(created_name, created.json()["name"])
-            self.assertTrue((workspace / ".echobot" / "sessions" / f"{renamed_name}.jsonl").exists())
+            self.assertEqual(created_title, created.json()["title"])
+            self.assertTrue((workspace / ".echobot" / "sessions" / f"{session_id}.jsonl").exists())
 
             self.assertEqual(200, current.status_code)
-            self.assertEqual(created_name, current.json()["name"])
+            self.assertEqual(session_id, current.json()["id"])
 
             self.assertEqual(200, detail.status_code)
-            self.assertEqual(created_name, detail.json()["name"])
+            self.assertEqual(created_title, detail.json()["title"])
 
             self.assertEqual(200, renamed.status_code)
-            self.assertEqual(renamed_name, renamed.json()["name"])
+            self.assertEqual(renamed_title, renamed.json()["title"])
 
             self.assertEqual(200, renamed_detail.status_code)
-            self.assertEqual(renamed_name, renamed_detail.json()["name"])
+            self.assertEqual(renamed_title, renamed_detail.json()["title"])
 
     def test_role_endpoints_support_chinese_role_names(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1552,7 +1599,7 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "default",
+                        "session_id": "default",
                         "prompt": "ping",
                     },
                 )
@@ -1624,28 +1671,25 @@ class AppApiTests(unittest.TestCase):
             )
 
             with TestClient(app) as client:
-                client.post("/api/sessions", json={"name": "demo"})
                 client.post(
                     "/api/chat",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "ping",
                     },
                 )
 
-                renamed = client.patch("/api/sessions/demo", json={"name": "demo-renamed"})
+                renamed = client.patch("/api/sessions/demo", json={"title": "Demo renamed"})
                 current = client.get("/api/sessions/current")
-                renamed_detail = client.get("/api/sessions/demo-renamed")
-                missing = client.get("/api/sessions/demo")
+                renamed_detail = client.get("/api/sessions/demo")
 
             self.assertEqual(200, renamed.status_code)
-            self.assertEqual("demo-renamed", renamed.json()["name"])
+            self.assertEqual("Demo renamed", renamed.json()["title"])
             self.assertEqual(2, len(renamed.json()["history"]))
             self.assertEqual(200, current.status_code)
-            self.assertEqual("demo-renamed", current.json()["name"])
+            self.assertEqual("demo", current.json()["id"])
             self.assertEqual(200, renamed_detail.status_code)
-            self.assertEqual("demo-renamed", renamed_detail.json()["name"])
-            self.assertEqual(404, missing.status_code)
+            self.assertEqual("Demo renamed", renamed_detail.json()["title"])
 
     def test_delete_session_endpoint_removes_route_session_reference(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1667,58 +1711,37 @@ class AppApiTests(unittest.TestCase):
 
             with TestClient(app) as client:
                 runtime = client.app.state.runtime
-                route_session = runtime.route_session_store.create_session(
-                    route_key,
-                    title="Route chat",
-                )
-                runtime.context.session_store.load_or_create_session(
-                    route_session.session_name,
-                )
-                runtime.context.agent_session_store.load_or_create_session(
-                    route_session.session_name,
-                )
+                session = runtime.context.session_store.create_session("Route chat")
+                runtime.route_binding_store.bind_session(route_key, session.id)
                 runtime.delivery_store.remember(
-                    route_session.session_name,
+                    session.id,
                     ChannelAddress(channel="telegram", chat_id="12345"),
                     {"message_id": 9},
                 )
-                runtime.context.session_store.set_current_session(
-                    route_session.session_name,
-                )
 
                 deleted = client.delete(
-                    f"/api/sessions/{quote(route_session.session_name, safe='')}",
+                    f"/api/sessions/{quote(session.id, safe='')}",
                 )
                 current_session = client.get("/api/sessions/current")
 
-                replacement = runtime.route_session_store.get_current_session(route_key)
-
             self.assertEqual(200, deleted.status_code)
             self.assertTrue(deleted.json()["deleted"])
-            self.assertNotEqual(route_session.session_name, replacement.session_name)
+            self.assertIsNone(runtime.route_binding_store.current_session_id(route_key))
             self.assertFalse(
                 (
                     workspace
                     / ".echobot"
                     / "sessions"
-                    / f"{route_session.session_name}.jsonl"
-                ).exists()
-            )
-            self.assertFalse(
-                (
-                    workspace
-                    / ".echobot"
-                    / "agent_sessions"
-                    / f"{route_session.session_name}.jsonl"
+                    / f"{session.id}.jsonl"
                 ).exists()
             )
             self.assertIsNone(
-                runtime.delivery_store.get_session_target(route_session.session_name),
+                runtime.delivery_store.get_session_target(session.id),
             )
             self.assertEqual(200, current_session.status_code)
             self.assertNotEqual(
-                route_session.session_name,
-                current_session.json()["name"],
+                session.id,
+                current_session.json()["id"],
             )
 
     def test_chat_endpoint_returns_job_for_agent_style_requests(self) -> None:
@@ -1740,7 +1763,7 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "Please set a cron reminder",
                     },
                 )
@@ -1751,12 +1774,12 @@ class AppApiTests(unittest.TestCase):
                 self.assertFalse(payload["completed"])
                 self.assertEqual("running", payload["status"])
                 self.assertEqual("working", payload["response"])
-                self.assertTrue(payload["job_id"])
+                self.assertTrue(payload["run_id"])
 
-                job_id = payload["job_id"]
+                run_id = payload["run_id"]
                 final = None
                 for _ in range(20):
-                    final = client.get(f"/api/chat/jobs/{job_id}")
+                    final = client.get(f"/api/chat/runs/{run_id}")
                     if final.json()["status"] != "running":
                         break
                     time.sleep(0.01)
@@ -1787,7 +1810,7 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "Please set a cron reminder",
                     },
                 )
@@ -1798,12 +1821,12 @@ class AppApiTests(unittest.TestCase):
                 self.assertFalse(payload["completed"])
                 self.assertEqual("running", payload["status"])
                 self.assertEqual("", payload["response"])
-                self.assertTrue(payload["job_id"])
+                self.assertTrue(payload["run_id"])
 
-                job_id = payload["job_id"]
+                run_id = payload["run_id"]
                 final = None
                 for _ in range(20):
-                    final = client.get(f"/api/chat/jobs/{job_id}")
+                    final = client.get(f"/api/chat/runs/{run_id}")
                     if final.json()["status"] != "running":
                         break
                     time.sleep(0.01)
@@ -1839,17 +1862,17 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "Please set a cron reminder",
                     },
                 )
 
                 self.assertEqual(200, replied.status_code)
-                job_id = replied.json()["job_id"]
-                self.assertTrue(job_id)
+                run_id = replied.json()["run_id"]
+                self.assertTrue(run_id)
 
-                cancelled = client.post(f"/api/chat/jobs/{job_id}/cancel")
-                final = client.get(f"/api/chat/jobs/{job_id}")
+                cancelled = client.post(f"/api/chat/runs/{run_id}/cancel")
+                final = client.get(f"/api/chat/runs/{run_id}")
                 detail = client.get("/api/sessions/demo")
 
             self.assertEqual(200, cancelled.status_code)
@@ -1890,28 +1913,28 @@ class AppApiTests(unittest.TestCase):
                 first = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "Please set a cron reminder",
                     },
                 )
                 second = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "Please set a cron reminder",
                     },
                 )
-                jobs = client.get("/api/chat/jobs?session_name=demo&limit=10")
+                runs = client.get("/api/chat/runs?session_id=demo&limit=10")
 
             self.assertEqual(200, first.status_code)
             self.assertEqual(200, second.status_code)
-            self.assertEqual(200, jobs.status_code)
-            payload = jobs.json()
-            self.assertEqual(2, len(payload["jobs"]))
-            self.assertEqual("demo", payload["jobs"][0]["session_name"])
-            self.assertIn("prompt", payload["jobs"][0])
-            self.assertIn("attempt", payload["jobs"][0])
-            self.assertIn("started_at", payload["jobs"][0])
+            self.assertEqual(200, runs.status_code)
+            payload = runs.json()
+            self.assertEqual(2, len(payload["runs"]))
+            self.assertEqual("demo", payload["runs"][0]["session_id"])
+            self.assertIn("prompt", payload["runs"][0])
+            self.assertIn("attempt", payload["runs"][0])
+            self.assertIn("started_at", payload["runs"][0])
 
     def test_chat_job_retry_endpoint_starts_new_attempt(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1932,23 +1955,23 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "Please set a cron reminder",
                     },
                 )
-                original_job_id = replied.json()["job_id"]
-                cancelled = client.post(f"/api/chat/jobs/{original_job_id}/cancel")
-                retried = client.post(f"/api/chat/jobs/{original_job_id}/retry")
+                original_run_id = replied.json()["run_id"]
+                cancelled = client.post(f"/api/chat/runs/{original_run_id}/cancel")
+                retried = client.post(f"/api/chat/runs/{original_run_id}/retry")
 
                 self.assertEqual(200, cancelled.status_code)
                 self.assertEqual(200, retried.status_code)
-                self.assertNotEqual(original_job_id, retried.json()["job_id"])
+                self.assertNotEqual(original_run_id, retried.json()["run_id"])
                 self.assertEqual("running", retried.json()["status"])
 
-                retried_job_id = retried.json()["job_id"]
+                retried_run_id = retried.json()["run_id"]
                 final = None
                 for _ in range(300):
-                    final = client.get(f"/api/chat/jobs/{retried_job_id}")
+                    final = client.get(f"/api/chat/runs/{retried_run_id}")
                     if final.json()["status"] != "running":
                         break
                     time.sleep(0.01)
@@ -1957,7 +1980,7 @@ class AppApiTests(unittest.TestCase):
             self.assertEqual(200, final.status_code)
             self.assertEqual("completed", final.json()["status"])
             self.assertEqual(2, final.json()["attempt"])
-            self.assertEqual(original_job_id, final.json()["retry_of_job_id"])
+            self.assertEqual(original_run_id, final.json()["retry_of_run_id"])
 
     def test_chat_job_trace_endpoint_returns_recorded_trace_events(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1978,18 +2001,18 @@ class AppApiTests(unittest.TestCase):
                 replied = client.post(
                     "/api/chat",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "Please set a cron reminder",
                     },
                 )
 
                 self.assertEqual(200, replied.status_code)
-                job_id = replied.json()["job_id"]
-                self.assertTrue(job_id)
+                run_id = replied.json()["run_id"]
+                self.assertTrue(run_id)
 
                 trace_response = None
                 for _ in range(20):
-                    trace_response = client.get(f"/api/chat/jobs/{job_id}/trace")
+                    trace_response = client.get(f"/api/chat/runs/{run_id}/events")
                     events = trace_response.json()["events"]
                     if events and events[-1]["event"] == "turn_completed":
                         break
@@ -1998,7 +2021,7 @@ class AppApiTests(unittest.TestCase):
             assert trace_response is not None
             self.assertEqual(200, trace_response.status_code)
             payload = trace_response.json()
-            self.assertEqual(job_id, payload["job_id"])
+            self.assertEqual(run_id, payload["run_id"])
             self.assertEqual("completed", payload["status"])
             self.assertGreaterEqual(len(payload["events"]), 3)
             self.assertEqual("turn_started", payload["events"][0]["event"])
@@ -2029,7 +2052,7 @@ class AppApiTests(unittest.TestCase):
                     "POST",
                     "/api/chat/stream",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "ping",
                     },
                 ) as response:
@@ -2051,6 +2074,55 @@ class AppApiTests(unittest.TestCase):
             self.assertFalse(events[-1]["delegated"])
             self.assertTrue(events[-1]["completed"])
 
+    def test_chat_stream_endpoint_exposes_runtime_error(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            app = create_app(
+                runtime_options=RuntimeOptions(
+                    workspace=workspace,
+                    no_tools=True,
+                    no_skills=True,
+                    no_memory=True,
+                    no_heartbeat=True,
+                ),
+                channel_config_path=workspace / ".echobot" / "channels.json",
+                context_builder=build_test_context,
+            )
+
+            with TestClient(app) as client:
+                runtime = client.app.state.runtime
+
+                async def fail_chat_stream(*args, **kwargs):
+                    del args, kwargs
+                    raise RuntimeError("LLM provider network error: connection refused")
+
+                runtime.chat_service.run_prompt_stream = fail_chat_stream
+                with client.stream(
+                    "POST",
+                    "/api/chat/stream",
+                    json={
+                        "session_id": "demo",
+                        "prompt": "ping",
+                    },
+                ) as response:
+                    lines = [
+                        line if isinstance(line, str) else line.decode("utf-8")
+                        for line in response.iter_lines()
+                        if line
+                    ]
+
+            self.assertEqual(200, response.status_code)
+            events = [json.loads(line) for line in lines]
+            self.assertEqual(
+                [
+                    {
+                        "type": "error",
+                        "message": "LLM provider network error: connection refused",
+                    }
+                ],
+                events,
+            )
+
     def test_chat_stream_endpoint_streams_agent_ack_before_background_job(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
@@ -2071,7 +2143,7 @@ class AppApiTests(unittest.TestCase):
                     "POST",
                     "/api/chat/stream",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "Please set a cron reminder",
                     },
                 ) as response:
@@ -2082,10 +2154,10 @@ class AppApiTests(unittest.TestCase):
                     ]
 
                 done_event = json.loads(lines[-1])
-                final_job = None
+                final_run = None
                 for _ in range(20):
-                    final_job = client.get(f"/api/chat/jobs/{done_event['job_id']}")
-                    if final_job.json()["status"] != "running":
+                    final_run = client.get(f"/api/chat/runs/{done_event['run_id']}")
+                    if final_run.json()["status"] != "running":
                         break
                     time.sleep(0.01)
 
@@ -2096,13 +2168,13 @@ class AppApiTests(unittest.TestCase):
             self.assertTrue(done_event["delegated"])
             self.assertFalse(done_event["completed"])
             self.assertEqual("working", done_event["response"])
-            self.assertTrue(done_event["job_id"])
+            self.assertTrue(done_event["run_id"])
 
-            assert final_job is not None
-            self.assertEqual(200, final_job.status_code)
-            self.assertEqual("completed", final_job.json()["status"])
-            self.assertEqual("done", final_job.json()["response"])
-            self.assertEqual("done", final_job.json()["response_content"])
+            assert final_run is not None
+            self.assertEqual(200, final_run.status_code)
+            self.assertEqual("completed", final_run.json()["status"])
+            self.assertEqual("done", final_run.json()["response"])
+            self.assertEqual("done", final_run.json()["response_content"])
 
     def test_chat_stream_disconnect_after_ack_still_runs_background_job(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -2124,7 +2196,7 @@ class AppApiTests(unittest.TestCase):
                     "POST",
                     "/api/chat/stream",
                     json={
-                        "session_name": "demo",
+                        "session_id": "demo",
                         "prompt": "Please set a cron reminder",
                     },
                 ) as response:
@@ -2334,6 +2406,11 @@ class AppApiTests(unittest.TestCase):
                 self.assertIn('id="file-write-enabled-checkbox"', page.text)
                 self.assertIn('id="cron-mutation-enabled-checkbox"', page.text)
                 self.assertIn('id="web-private-network-enabled-checkbox"', page.text)
+                self.assertIn('id="llm-provider-manage-button"', page.text)
+                self.assertIn('id="llm-provider-dialog"', page.text)
+                self.assertIn('id="llm-provider-use-button"', page.text)
+                self.assertNotIn('id="llm-provider-save-button"', page.text)
+                self.assertNotIn('id="llm-provider-save-use-button"', page.text)
                 self.assertIn('id="heartbeat-panel"', page.text)
                 self.assertIn('id="heartbeat-input"', page.text)
                 self.assertIn('id="heartbeat-save-button"', page.text)
@@ -2366,7 +2443,7 @@ class AppApiTests(unittest.TestCase):
 
                 self.assertEqual(200, config.status_code)
                 payload = config.json()
-                self.assertEqual("default", payload["session_name"])
+                self.assertEqual("default", payload["session_id"])
                 self.assertEqual("auto", payload["route_mode"])
                 self.assertTrue(payload["runtime"]["delegated_ack_enabled"])
                 self.assertEqual(
@@ -2431,26 +2508,9 @@ class AppApiTests(unittest.TestCase):
                 self.assertEqual(200, texture_response.status_code)
                 self.assertIn("DisplayInfo", model_response.text)
 
-    def test_web_console_runtime_toggle_updates_config_and_persists(self) -> None:
+    def test_web_console_switches_llm_provider_and_persists_selection(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
-            settings_path = workspace / ".echobot" / "runtime_settings.json"
-            settings_path.parent.mkdir(parents=True, exist_ok=True)
-            settings_path.write_text(
-                json.dumps(
-                    {
-                        "delegated_ack_enabled": True,
-                        "shell_safety_mode": "danger-full-access",
-                        "file_write_enabled": True,
-                        "cron_mutation_enabled": True,
-                        "web_private_network_enabled": False,
-                        "future_setting": "keep-me",
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
             app = create_app(
                 runtime_options=RuntimeOptions(
                     workspace=workspace,
@@ -2466,92 +2526,28 @@ class AppApiTests(unittest.TestCase):
             )
 
             with TestClient(app) as client:
+                config = client.get("/api/web/config")
+                revision = config.json()["llm"]["revision"]
                 updated = client.patch(
-                    "/api/web/runtime",
+                    "/api/web/llm/provider",
                     json={
-                        "delegated_ack_enabled": False,
-                        "shell_safety_mode": "read-only",
-                        "file_write_enabled": False,
-                        "cron_mutation_enabled": False,
-                        "web_private_network_enabled": True,
+                        "provider": "backup",
+                        "expected_revision": revision,
                     },
                 )
-                config = client.get("/api/web/config")
 
             self.assertEqual(200, updated.status_code)
-            self.assertFalse(updated.json()["delegated_ack_enabled"])
-            self.assertEqual("read-only", updated.json()["shell_safety_mode"])
-            self.assertFalse(updated.json()["file_write_enabled"])
-            self.assertFalse(updated.json()["cron_mutation_enabled"])
-            self.assertTrue(updated.json()["web_private_network_enabled"])
-            self.assertEqual(200, config.status_code)
-            self.assertFalse(config.json()["runtime"]["delegated_ack_enabled"])
-            self.assertEqual("read-only", config.json()["runtime"]["shell_safety_mode"])
-            self.assertFalse(config.json()["runtime"]["file_write_enabled"])
-            self.assertFalse(config.json()["runtime"]["cron_mutation_enabled"])
-            self.assertTrue(config.json()["runtime"]["web_private_network_enabled"])
-
-            self.assertTrue(settings_path.exists())
-            settings_payload = json.loads(settings_path.read_text(encoding="utf-8"))
-            self.assertEqual(
-                {
-                    "delegated_ack_enabled": False,
-                    "shell_safety_mode": "read-only",
-                    "file_write_enabled": False,
-                    "cron_mutation_enabled": False,
-                    "web_private_network_enabled": True,
-                    "future_setting": "keep-me",
-                },
-                settings_payload,
+            self.assertEqual("backup", updated.json()["active_provider"])
+            payload = json.loads(
+                (workspace / ".echobot" / "settings.json").read_text(
+                    encoding="utf-8"
+                )
             )
+            self.assertEqual("backup", payload["llm"]["active_provider"])
 
-            restarted_app = create_app(
-                runtime_options=RuntimeOptions(
-                    workspace=workspace,
-                    no_tools=True,
-                    no_skills=True,
-                    no_memory=True,
-                    no_heartbeat=True,
-                ),
-                channel_config_path=workspace / ".echobot" / "channels.json",
-                context_builder=build_test_context,
-                tts_service_builder=build_test_tts_service,
-                asr_service_builder=build_test_asr_service,
-            )
-
-            with TestClient(restarted_app) as client:
-                restarted_config = client.get("/api/web/config")
-
-            self.assertEqual(200, restarted_config.status_code)
-            self.assertFalse(restarted_config.json()["runtime"]["delegated_ack_enabled"])
-            self.assertEqual(
-                "read-only",
-                restarted_config.json()["runtime"]["shell_safety_mode"],
-            )
-            self.assertFalse(restarted_config.json()["runtime"]["file_write_enabled"])
-            self.assertFalse(restarted_config.json()["runtime"]["cron_mutation_enabled"])
-            self.assertTrue(restarted_config.json()["runtime"]["web_private_network_enabled"])
-
-    def test_web_console_runtime_patch_updates_only_requested_fields(self) -> None:
+    def test_web_console_manages_user_llm_providers_without_exposing_key(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
-            settings_path = workspace / ".echobot" / "runtime_settings.json"
-            settings_path.parent.mkdir(parents=True, exist_ok=True)
-            settings_path.write_text(
-                json.dumps(
-                    {
-                        "delegated_ack_enabled": False,
-                        "shell_safety_mode": "read-only",
-                        "file_write_enabled": True,
-                        "cron_mutation_enabled": False,
-                        "web_private_network_enabled": True,
-                        "future_setting": "keep-me",
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
             app = create_app(
                 runtime_options=RuntimeOptions(
                     workspace=workspace,
@@ -2567,201 +2563,74 @@ class AppApiTests(unittest.TestCase):
             )
 
             with TestClient(app) as client:
-                updated = client.patch(
-                    "/api/web/runtime",
-                    json={"file_write_enabled": False},
-                )
-                config = client.get("/api/web/config")
-
-            self.assertEqual(200, updated.status_code)
-            self.assertFalse(updated.json()["delegated_ack_enabled"])
-            self.assertEqual("read-only", updated.json()["shell_safety_mode"])
-            self.assertFalse(updated.json()["file_write_enabled"])
-            self.assertFalse(updated.json()["cron_mutation_enabled"])
-            self.assertTrue(updated.json()["web_private_network_enabled"])
-
-            self.assertEqual(200, config.status_code)
-            self.assertFalse(config.json()["runtime"]["delegated_ack_enabled"])
-            self.assertEqual("read-only", config.json()["runtime"]["shell_safety_mode"])
-            self.assertFalse(config.json()["runtime"]["file_write_enabled"])
-            self.assertFalse(config.json()["runtime"]["cron_mutation_enabled"])
-            self.assertTrue(config.json()["runtime"]["web_private_network_enabled"])
-
-            settings_payload = json.loads(settings_path.read_text(encoding="utf-8"))
-            self.assertEqual(
-                {
-                    "delegated_ack_enabled": False,
-                    "shell_safety_mode": "read-only",
-                    "file_write_enabled": False,
-                    "cron_mutation_enabled": False,
-                    "web_private_network_enabled": True,
-                    "future_setting": "keep-me",
-                },
-                settings_payload,
-            )
-
-    def test_web_console_runtime_reset_clears_overrides_and_restores_defaults(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workspace = Path(temp_dir)
-            settings_path = workspace / ".echobot" / "runtime_settings.json"
-            settings_path.parent.mkdir(parents=True, exist_ok=True)
-            settings_path.write_text(
-                json.dumps(
-                    {
-                        "delegated_ack_enabled": True,
-                        "shell_safety_mode": "read-only",
-                        "file_write_enabled": False,
-                        "cron_mutation_enabled": False,
-                        "web_private_network_enabled": True,
-                        "future_setting": "keep-me",
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            runtime_options = RuntimeOptions(
-                workspace=workspace,
-                delegated_ack_enabled=False,
-                no_tools=True,
-                no_skills=True,
-                no_memory=True,
-                no_heartbeat=True,
-            )
-            app = create_app(
-                runtime_options=runtime_options,
-                channel_config_path=workspace / ".echobot" / "channels.json",
-                context_builder=build_test_context,
-                tts_service_builder=build_test_tts_service,
-                asr_service_builder=build_test_asr_service,
-            )
-
-            with TestClient(app) as client:
-                reset = client.post("/api/web/runtime/reset")
-                config = client.get("/api/web/config")
-
-            self.assertEqual(200, reset.status_code)
-            self.assertFalse(reset.json()["delegated_ack_enabled"])
-            self.assertEqual("danger-full-access", reset.json()["shell_safety_mode"])
-            self.assertTrue(reset.json()["file_write_enabled"])
-            self.assertTrue(reset.json()["cron_mutation_enabled"])
-            self.assertFalse(reset.json()["web_private_network_enabled"])
-
-            self.assertEqual(200, config.status_code)
-            self.assertFalse(config.json()["runtime"]["delegated_ack_enabled"])
-            self.assertEqual(
-                "danger-full-access",
-                config.json()["runtime"]["shell_safety_mode"],
-            )
-            self.assertTrue(config.json()["runtime"]["file_write_enabled"])
-            self.assertTrue(config.json()["runtime"]["cron_mutation_enabled"])
-            self.assertFalse(config.json()["runtime"]["web_private_network_enabled"])
-
-            settings_payload = json.loads(settings_path.read_text(encoding="utf-8"))
-            self.assertEqual(
-                {
-                    "future_setting": "keep-me",
-                },
-                settings_payload,
-            )
-
-            restarted_app = create_app(
-                runtime_options=runtime_options,
-                channel_config_path=workspace / ".echobot" / "channels.json",
-                context_builder=build_test_context,
-                tts_service_builder=build_test_tts_service,
-                asr_service_builder=build_test_asr_service,
-            )
-
-            with TestClient(restarted_app) as client:
-                restarted_config = client.get("/api/web/config")
-
-            self.assertEqual(200, restarted_config.status_code)
-            self.assertFalse(restarted_config.json()["runtime"]["delegated_ack_enabled"])
-            self.assertEqual(
-                "danger-full-access",
-                restarted_config.json()["runtime"]["shell_safety_mode"],
-            )
-            self.assertTrue(restarted_config.json()["runtime"]["file_write_enabled"])
-            self.assertTrue(restarted_config.json()["runtime"]["cron_mutation_enabled"])
-            self.assertFalse(
-                restarted_config.json()["runtime"]["web_private_network_enabled"]
-            )
-
-    def test_web_console_asr_provider_switch_updates_config_and_persists(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workspace = Path(temp_dir)
-            settings_path = workspace / ".echobot" / "runtime_settings.json"
-            settings_path.parent.mkdir(parents=True, exist_ok=True)
-            settings_path.write_text(
-                json.dumps(
-                    {
-                        "delegated_ack_enabled": True,
-                        "future_setting": "keep-me",
-                    },
-                    ensure_ascii=False,
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-            app = create_app(
-                runtime_options=RuntimeOptions(
-                    workspace=workspace,
-                    no_tools=True,
-                    no_skills=True,
-                    no_memory=True,
-                    no_heartbeat=True,
-                ),
-                channel_config_path=workspace / ".echobot" / "channels.json",
-                context_builder=build_test_context,
-                tts_service_builder=build_test_tts_service,
-                asr_service_builder=build_test_asr_service,
-            )
-
-            with TestClient(app) as client:
-                updated = client.patch(
-                    "/api/web/asr/provider",
+                config = client.get("/api/web/llm").json()
+                created = client.post(
+                    "/api/web/llm/providers",
                     json={
-                        "provider": "backup-asr",
+                        "name": "local-test",
+                        "label": "Local Test",
+                        "model": "test-model",
+                        "base_url": "http://127.0.0.1:9000/v1",
+                        "api_key": "top-secret",
+                        "supports_image_input": False,
+                        "expected_config_revision": config["config_revision"],
                     },
                 )
-                config = client.get("/api/web/config")
 
-            self.assertEqual(200, updated.status_code)
-            self.assertEqual("backup-asr", updated.json()["selected_asr_provider"])
-            self.assertEqual(200, config.status_code)
-            self.assertEqual("backup-asr", config.json()["asr"]["selected_asr_provider"])
+                self.assertEqual(200, created.status_code)
+                created_payload = created.json()
+                serialized = json.dumps(created_payload, ensure_ascii=False)
+                self.assertNotIn("top-secret", serialized)
+                user_provider = next(
+                    item
+                    for item in created_payload["providers"]
+                    if item["name"] == "local-test"
+                )
+                self.assertTrue(user_provider["editable"])
+                self.assertTrue(user_provider["api_key_configured"])
 
-            self.assertTrue(settings_path.exists())
-            settings_payload = json.loads(settings_path.read_text(encoding="utf-8"))
-            self.assertEqual(
-                {
-                    "delegated_ack_enabled": True,
-                    "selected_asr_provider": "backup-asr",
-                    "future_setting": "keep-me",
-                },
-                settings_payload,
-            )
+                edited = client.patch(
+                    "/api/web/llm/providers/local-test",
+                    json={
+                        "label": "Updated Local",
+                        "expected_config_revision": created_payload[
+                            "config_revision"
+                        ],
+                    },
+                )
+                self.assertEqual(200, edited.status_code)
+                edited_payload = edited.json()
+                self.assertTrue(
+                    any(
+                        item["label"] == "Updated Local"
+                        for item in edited_payload["providers"]
+                    )
+                )
 
-            restarted_app = create_app(
-                runtime_options=RuntimeOptions(
-                    workspace=workspace,
-                    no_tools=True,
-                    no_skills=True,
-                    no_memory=True,
-                    no_heartbeat=True,
-                ),
-                channel_config_path=workspace / ".echobot" / "channels.json",
-                context_builder=build_test_context,
-                tts_service_builder=build_test_tts_service,
-                asr_service_builder=build_test_asr_service,
-            )
+                deleted = client.delete(
+                    "/api/web/llm/providers/local-test",
+                    params={
+                        "expected_config_revision": edited_payload[
+                            "config_revision"
+                        ]
+                    },
+                )
+                self.assertEqual(200, deleted.status_code)
+                self.assertFalse(
+                    any(
+                        item["name"] == "local-test"
+                        for item in deleted.json()["providers"]
+                    )
+                )
 
-            with TestClient(restarted_app) as client:
-                restarted_config = client.get("/api/web/config")
-
-            self.assertEqual(200, restarted_config.status_code)
-            self.assertEqual("backup-asr", restarted_config.json()["asr"]["selected_asr_provider"])
+            providers_text = (
+                workspace / ".echobot" / "llm_providers.json"
+            ).read_text(encoding="utf-8")
+            credentials_text = (
+                workspace / ".echobot" / "secrets" / "llm_credentials.json"
+            ).read_text(encoding="utf-8")
+            self.assertNotIn("top-secret", providers_text)
+            self.assertNotIn("top-secret", credentials_text)
 
     def test_web_console_stage_background_upload_and_asset_routes_work(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

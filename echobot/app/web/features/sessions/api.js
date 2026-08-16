@@ -6,33 +6,33 @@ export function createSessionsApi(deps) {
         return Array.isArray(payload) ? payload : [];
     }
 
-    async function requestSessionDetail(sessionName) {
-        return await requestJson(`/api/sessions/${encodeURIComponent(sessionName)}`);
+    async function requestSessionDetail(sessionId) {
+        return await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`);
     }
 
-    async function switchCurrentSession(sessionName) {
+    async function switchCurrentSession(sessionId) {
         return await requestJson("/api/sessions/current", {
             method: "PUT",
             headers: {
                 "Content-Type": "application/json",
             },
-            body: JSON.stringify({ name: sessionName }),
+            body: JSON.stringify({ session_id: sessionId }),
         });
     }
 
-    async function createSession(sessionName) {
+    async function createSession(title) {
         return await requestJson("/api/sessions", {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
             },
-            body: JSON.stringify(sessionName ? { name: sessionName } : {}),
+            body: JSON.stringify(title ? { title: title } : {}),
         });
     }
 
-    async function updateSessionRole(sessionName, roleName) {
+    async function updateSessionRole(sessionId, roleName) {
         return await requestJson(
-            `/api/sessions/${encodeURIComponent(sessionName)}/role`,
+            `/api/sessions/${encodeURIComponent(sessionId)}/role`,
             {
                 method: "PUT",
                 headers: {
@@ -43,9 +43,9 @@ export function createSessionsApi(deps) {
         );
     }
 
-    async function updateSessionRouteMode(sessionName, routeMode) {
+    async function updateSessionRouteMode(sessionId, routeMode) {
         return await requestJson(
-            `/api/sessions/${encodeURIComponent(sessionName)}/route-mode`,
+            `/api/sessions/${encodeURIComponent(sessionId)}/route-mode`,
             {
                 method: "PUT",
                 headers: {
@@ -56,18 +56,18 @@ export function createSessionsApi(deps) {
         );
     }
 
-    async function renameSession(sessionName, nextSessionName) {
-        return await requestJson(`/api/sessions/${encodeURIComponent(sessionName)}`, {
+    async function renameSession(sessionId, title) {
+        return await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`, {
             method: "PATCH",
             headers: {
                 "Content-Type": "application/json",
             },
-            body: JSON.stringify({ name: nextSessionName }),
+            body: JSON.stringify({ title: title }),
         });
     }
 
-    async function deleteSession(sessionName) {
-        return await requestJson(`/api/sessions/${encodeURIComponent(sessionName)}`, {
+    async function deleteSession(sessionId) {
+        return await requestJson(`/api/sessions/${encodeURIComponent(sessionId)}`, {
             method: "DELETE",
         });
     }

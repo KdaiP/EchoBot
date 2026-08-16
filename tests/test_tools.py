@@ -14,6 +14,7 @@ from unittest.mock import patch
 
 from echobot import (
     AgentCore,
+    AgentRequest,
     AttachmentStore,
     LLMMessage,
     WebRequestTool,
@@ -170,12 +171,14 @@ class FakeMemorySearchSupport:
 
 
 class AgentToolLoopTests(unittest.IsolatedAsyncioTestCase):
-    async def test_ask_with_tools_runs_tool_loop(self) -> None:
+    async def test_agent_core_runs_tool_loop(self) -> None:
         provider = FakeToolProvider()
         agent = AgentCore(provider)
         registry = ToolRegistry([EchoTool()])
 
-        result = await agent.ask_with_tools("test", tool_registry=registry)
+        result = await agent.run(
+            AgentRequest(prompt="test", tool_registry=registry)
+        )
 
         self.assertEqual("done", result.response.message.content)
         self.assertEqual(2, provider.calls)

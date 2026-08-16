@@ -2,21 +2,14 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from pathlib import Path
-from typing import TYPE_CHECKING
 
 from ..runtime.settings import (
     RUNTIME_SETTING_DEFINITIONS,
-    RuntimeControls,
-    RuntimeSettingsManager,
+    SettingsService,
     format_runtime_setting_value,
     parse_text_runtime_setting_value,
 )
 from .parsing import split_action_argument, split_command_parts
-
-if TYPE_CHECKING:
-    from ..orchestration import ConversationCoordinator
-
 
 @dataclass(slots=True)
 class RuntimeCommand:
@@ -74,22 +67,14 @@ def format_runtime_help() -> str:
 
 
 async def execute_runtime_command(
-    coordinator: "ConversationCoordinator",
-    runtime_controls: RuntimeControls,
-    workspace: Path,
+    settings_service: SettingsService,
     command: RuntimeCommand,
 ) -> str:
-    manager = RuntimeSettingsManager(
-        workspace,
-        coordinator=coordinator,
-        runtime_controls=runtime_controls,
-    )
-
     if command.action == "help":
         return format_runtime_help()
 
     if command.action == "list":
-        return _format_runtime_settings_list(manager)
+        return _format_runtime_settings_list(settings_service)
 
     if command.action == "get":
         if not command.key:
@@ -98,7 +83,7 @@ async def execute_runtime_command(
             return _format_unknown_runtime_setting(command.key)
         return _format_runtime_setting_line(
             command.key,
-            manager.get(command.key),
+            settings_service.get_runtime_value(command.key),
         )
 
     if command.action == "set":
@@ -112,9 +97,8 @@ async def execute_runtime_command(
             return str(exc)
         try:
             snapshot = await asyncio.to_thread(
-                manager.apply_named_value,
-                command.key,
-                parsed_value,
+                settings_service.apply_runtime_updates,
+                {command.key: parsed_value},
             )
         except Exception as exc:
             return f"Failed to save runtime settings: {exc}"
@@ -130,9 +114,9 @@ async def execute_runtime_command(
 
 
 def _format_runtime_settings_list(
-    manager: RuntimeSettingsManager,
+    settings_service: SettingsService,
 ) -> str:
-    snapshot = manager.snapshot()
+    snapshot = settings_service.runtime_snapshot()
     lines = ["Runtime settings:"]
     for name in RUNTIME_SETTING_DEFINITIONS:
         lines.append(

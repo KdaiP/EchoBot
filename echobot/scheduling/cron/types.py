@@ -30,7 +30,7 @@ class CronSchedule:
 class CronPayload:
     kind: Literal["agent", "text"] = "agent"
     content: str = ""
-    session_name: str = "default"
+    session_id: str = "heartbeat"
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -40,7 +40,7 @@ class CronPayload:
         return cls(
             kind=str(data.get("kind", "agent")),  # type: ignore[arg-type]
             content=str(data.get("content", "")),
-            session_name=str(data.get("session_name", "default")),
+            session_id=str(data.get("session_id", "heartbeat")),
         )
 
 

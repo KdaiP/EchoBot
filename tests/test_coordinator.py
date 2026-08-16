@@ -10,13 +10,13 @@ from pathlib import Path
 from echobot import AgentCore, LLMMessage, LLMResponse
 from echobot.orchestration import (
     ConversationCoordinator,
-    ConversationJobStore,
     DecisionEngine,
     RoleCardRegistry,
     RoleplayEngine,
+    RunStore,
 )
 from echobot.models import ToolCall
-from echobot.orchestration.jobs import JOB_CANCELLED_TEXT
+from echobot.orchestration.runs import RUN_CANCELLED_TEXT
 from echobot.providers.base import LLMProvider
 from echobot.runtime.session_runner import SessionAgentRunner
 from echobot.runtime.sessions import SessionStore
@@ -176,7 +176,7 @@ class ConversationCoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
             job = None
             for _ in range(20):
-                job = await coordinator.get_job(result.job_id or "")
+                job = await coordinator.get_run(result.run_id or "")
                 if job is not None and job.status != "running":
                     break
                 await asyncio.sleep(0.01)
@@ -206,12 +206,12 @@ class ConversationCoordinatorTests(unittest.IsolatedAsyncioTestCase):
                     "Please set a cron reminder",
                 )
                 await coordinator.close()
-                job = await coordinator.get_job(result.job_id or "")
+                job = await coordinator.get_run(result.run_id or "")
 
                 self.assertIsNotNone(job)
                 assert job is not None
                 self.assertEqual("cancelled", job.status)
-                self.assertEqual(JOB_CANCELLED_TEXT, job.final_response)
+                self.assertEqual(RUN_CANCELLED_TEXT, job.final_response)
 
                 session = session_store.load_session("demo")
                 self.assertEqual(
@@ -234,19 +234,19 @@ class ConversationCoordinatorTests(unittest.IsolatedAsyncioTestCase):
                     "demo",
                     "Please set a cron reminder",
                 )
-                job = await coordinator.cancel_job(result.job_id or "")
+                job = await coordinator.cancel_run(result.run_id or "")
 
                 self.assertIsNotNone(job)
                 assert job is not None
                 self.assertEqual("cancelled", job.status)
-                self.assertEqual(JOB_CANCELLED_TEXT, job.final_response)
+                self.assertEqual(RUN_CANCELLED_TEXT, job.final_response)
 
                 session = session_store.load_session("demo")
                 self.assertEqual(
                     [
                         "Please set a cron reminder",
                         "working",
-                        JOB_CANCELLED_TEXT,
+                        RUN_CANCELLED_TEXT,
                     ],
                     [message.content for message in session.history],
                 )
@@ -272,7 +272,7 @@ class ConversationCoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
             job = None
             for _ in range(20):
-                job = await coordinator.get_job(result.job_id or "")
+                job = await coordinator.get_run(result.run_id or "")
                 if job is not None and job.status != "running":
                     break
                 await asyncio.sleep(0.01)
@@ -304,7 +304,7 @@ class ConversationCoordinatorTests(unittest.IsolatedAsyncioTestCase):
                 "Please set a cron reminder",
             )
             for _ in range(20):
-                first_job = await coordinator.get_job(first_result.job_id or "")
+                first_job = await coordinator.get_run(first_result.run_id or "")
                 if first_job is not None and first_job.status != "running":
                     break
                 await asyncio.sleep(0.01)
@@ -316,7 +316,7 @@ class ConversationCoordinatorTests(unittest.IsolatedAsyncioTestCase):
 
             second_job = None
             for _ in range(20):
-                second_job = await coordinator.get_job(second_result.job_id or "")
+                second_job = await coordinator.get_run(second_result.run_id or "")
                 if second_job is not None and second_job.status != "running":
                     break
                 await asyncio.sleep(0.01)
@@ -330,19 +330,19 @@ class ConversationCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("done", second_job.final_response)
             self.assertNotIn("pending_user_input", session.metadata)
 
-    async def test_job_store_restores_running_job_as_failed_after_restart(self) -> None:
+    async def test_run_store_restores_running_run_as_failed_after_restart(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            store_path = Path(temp_dir) / "jobs.json"
-            store = ConversationJobStore(store_path)
+            store_path = Path(temp_dir) / "runs"
+            store = RunStore(store_path)
             created = await store.create(
-                session_name="demo",
+                session_id="demo",
                 prompt="Please set a cron reminder",
                 immediate_response="working",
                 role_name="default",
             )
 
-            reloaded_store = ConversationJobStore(store_path)
-            restored = await reloaded_store.get(created.job_id)
+            reloaded_store = RunStore(store_path)
+            restored = await reloaded_store.get(created.run_id)
 
             self.assertIsNotNone(restored)
             assert restored is not None
@@ -350,39 +350,39 @@ class ConversationCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("任务因 EchoBot 重启而中断。", restored.final_response)
             self.assertEqual("任务因 EchoBot 重启而中断。", restored.error)
 
-    async def test_job_store_persists_concurrent_creates_without_losing_jobs(self) -> None:
+    async def test_run_store_persists_concurrent_creates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
-            store_path = Path(temp_dir) / "jobs.json"
-            store = ConversationJobStore(store_path)
+            store_path = Path(temp_dir) / "runs"
+            store = RunStore(store_path)
 
             await asyncio.gather(
                 store.create(
-                    session_name="alpha",
+                    session_id="alpha",
                     prompt="first",
                     immediate_response="",
                     role_name="default",
                 ),
                 store.create(
-                    session_name="beta",
+                    session_id="beta",
                     prompt="second",
                     immediate_response="",
                     role_name="default",
                 ),
                 store.create(
-                    session_name="gamma",
+                    session_id="gamma",
                     prompt="third",
                     immediate_response="",
                     role_name="default",
                 ),
             )
 
-            reloaded_store = ConversationJobStore(store_path)
-            jobs = await reloaded_store.list_jobs(limit=10)
+            reloaded_store = RunStore(store_path)
+            runs = await reloaded_store.list_runs(limit=10)
 
-            self.assertEqual(3, len(jobs))
+            self.assertEqual(3, len(runs))
             self.assertEqual(
                 {"alpha", "beta", "gamma"},
-                {job.session_name for job in jobs},
+                {run.session_id for run in runs},
             )
 
     def _build_coordinator(
@@ -394,14 +394,16 @@ class ConversationCoordinatorTests(unittest.IsolatedAsyncioTestCase):
         tool_registry_factory=None,
     ) -> tuple[ConversationCoordinator, SessionStore]:
         session_store = SessionStore(workspace / "sessions")
-        agent_session_store = SessionStore(workspace / "agent_sessions")
+        session_store.create_session("Demo", session_id="demo")
+        run_store = RunStore(workspace / "runs")
         role_registry = RoleCardRegistry.discover(project_root=workspace)
         coordinator = ConversationCoordinator(
             session_store=session_store,
             agent_runner=SessionAgentRunner(
                 AgentCore(agent_provider or SlowAgentProvider()),
-                agent_session_store,
+                session_store,
                 tool_registry_factory=tool_registry_factory,
+                run_store=run_store,
             ),
             decision_engine=DecisionEngine(),
             roleplay_engine=RoleplayEngine(
@@ -410,6 +412,7 @@ class ConversationCoordinatorTests(unittest.IsolatedAsyncioTestCase):
             ),
             role_registry=role_registry,
             delegated_ack_enabled=delegated_ack_enabled,
+            run_store=run_store,
         )
         return coordinator, session_store
 

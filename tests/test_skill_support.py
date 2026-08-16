@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from echobot import AgentCore, LLMMessage, SkillRegistry, ToolRegistry
+from echobot import AgentCore, AgentRequest, LLMMessage, SkillRegistry, ToolRegistry
 from echobot.models import LLMResponse, LLMTool, ToolCall
 from echobot.providers.base import LLMProvider
 
@@ -383,7 +383,7 @@ class SkillToolRuntimeTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SkillAgentTests(unittest.IsolatedAsyncioTestCase):
-    async def test_ask_with_skills_adds_catalog_and_lazy_skill_tools(self) -> None:
+    async def test_agent_core_adds_catalog_and_lazy_skill_tools(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
             skill_dir = project_root / "skills" / "demo-skill"
@@ -406,7 +406,9 @@ class SkillAgentTests(unittest.IsolatedAsyncioTestCase):
             provider = SkillToolProvider()
             agent = AgentCore(provider)
 
-            result = await agent.ask_with_skills("help me", skill_registry=registry)
+            result = await agent.run(
+                AgentRequest(prompt="help me", skill_registry=registry)
+            )
 
             self.assertEqual("done", result.response.message.content)
             self.assertEqual(2, len(provider.calls))
@@ -424,7 +426,7 @@ class SkillAgentTests(unittest.IsolatedAsyncioTestCase):
             self.assertIn("demo body", tool_payload["result"]["content"])
             self.assertNotIn("references/guide.md", tool_payload["result"]["content"])
 
-    async def test_ask_with_skills_activates_explicit_skill_without_tool_call(self) -> None:
+    async def test_agent_core_activates_explicit_skill_without_tool_call(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
             skill_dir = project_root / "skills" / "demo-skill"
@@ -447,9 +449,11 @@ class SkillAgentTests(unittest.IsolatedAsyncioTestCase):
             provider = RecordingProvider()
             agent = AgentCore(provider)
 
-            response = await agent.ask_with_skills(
-                "Please follow /demo-skill for this task.",
-                skill_registry=registry,
+            response = await agent.run(
+                AgentRequest(
+                    prompt="Please follow /demo-skill for this task.",
+                    skill_registry=registry,
+                )
             )
 
             self.assertEqual("ok", response.response.message.content)

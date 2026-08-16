@@ -5,7 +5,7 @@ import logging
 import re
 from dataclasses import dataclass
 
-from ..agent import AgentCore
+from ..agent import AgentCore, AgentRequest
 from ..models import LLMMessage, message_content_to_text
 from .route_modes import DEFAULT_ROUTE_MODE, RouteMode
 
@@ -129,13 +129,16 @@ class DecisionEngine:
         if self._decider_agent is None:
             return RouteDecision(route="chat", reason="Fallback to lightweight chat")
 
-        response = await self._decider_agent.ask(
-            user_input,
-            history=_trim_history(history, max_messages=6),
-            extra_system_messages=[DECISION_SYSTEM_PROMPT],
-            temperature=0,
-            max_tokens=self._max_tokens,
+        result = await self._decider_agent.run(
+            AgentRequest(
+                prompt=user_input,
+                history=_trim_history(history, max_messages=6),
+                extra_system_messages=[DECISION_SYSTEM_PROMPT],
+                temperature=0,
+                max_tokens=self._max_tokens,
+            ),
         )
+        response = result.response
         decision = _parse_decision_response(
             message_content_to_text(response.message.content),
         )

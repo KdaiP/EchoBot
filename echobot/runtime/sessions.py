@@ -1,271 +1,367 @@
 from __future__ import annotations
 
-import json
+import re
 import threading
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
+from ..jsonl import append_jsonl, read_jsonl
 from ..models import LLMMessage, ToolCall, normalize_message_content
-from ..naming import normalize_name_token
+
+
+SESSION_SCHEMA_VERSION = 1
+SessionKind = Literal["user", "system"]
+_SESSION_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+class _UnrecognizedSessionLog(ValueError):
+    """A JSONL file in the sessions directory that is not a current session log."""
 
 
 @dataclass(slots=True)
-class ChatSession:
-    name: str
+class Session:
+    """One durable conversation with two explicit message surfaces.
+
+    ``history`` is the user-visible conversation. ``agent_history`` is the
+    internal tool-capable agent context. Keeping both surfaces in one aggregate
+    gives them one identity and one lifecycle without pretending they are the
+    same history.
+    """
+
+    id: str
+    title: str
     history: list[LLMMessage]
+    agent_history: list[LLMMessage]
+    created_at: str
     updated_at: str
-    compressed_summary: str = ""
+    agent_summary: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)
+    kind: SessionKind = "user"
 
 
-@dataclass(slots=True)
+@dataclass(slots=True, frozen=True)
 class SessionInfo:
-    name: str
+    id: str
+    title: str
     message_count: int
     updated_at: str
 
 
 class SessionStore:
+    """Append-only JSONL repository for session aggregates."""
+
     def __init__(self, base_dir: str | Path = ".echobot/sessions") -> None:
         self.base_dir = Path(base_dir)
-        self.index_file = self.base_dir / "index.jsonl"
+        self.state_file = self.base_dir / "state.jsonl"
         self._lock = threading.RLock()
 
-    def load_current_session(self) -> ChatSession:
+    def create_session(
+        self,
+        title: str | None = None,
+        *,
+        session_id: str | None = None,
+        kind: SessionKind = "user",
+    ) -> Session:
         with self._lock:
-            current_name = self.get_current_session_name()
-            if current_name:
-                return self.load_or_create_session(current_name)
-
-            default_session = self.load_or_create_session("default")
-            self.set_current_session(default_session.name)
-            return default_session
-
-    def load_or_create_session(self, name: str) -> ChatSession:
-        with self._lock:
-            normalized_name = normalize_session_name(name)
-            path = self._session_path(normalized_name)
+            resolved_id = normalize_session_id(session_id or uuid.uuid4().hex)
+            path = self._session_path(resolved_id)
             if path.exists():
-                return self.load_session(normalized_name)
+                raise ValueError(f"Session already exists: {resolved_id}")
+            if kind not in {"user", "system"}:
+                raise ValueError(f"Unsupported session kind: {kind}")
 
-            session = ChatSession(
-                name=normalized_name,
-                history=[],
-                updated_at=_now_text(),
-                compressed_summary="",
+            now = _now_text()
+            normalized_title = _normalize_title(title)
+            resolved_title = (
+                _require_title(normalized_title)
+                if normalized_title
+                else _default_title(now)
             )
-            self.save_session(session)
+            session = Session(
+                id=resolved_id,
+                title=resolved_title,
+                history=[],
+                agent_history=[],
+                created_at=now,
+                updated_at=now,
+                kind=kind,
+            )
+            self._append_records(
+                path,
+                [
+                    {
+                        "type": "session.created",
+                        "schema_version": SESSION_SCHEMA_VERSION,
+                        "session_id": session.id,
+                        "title": session.title,
+                        "kind": session.kind,
+                        "created_at": now,
+                    }
+                ],
+            )
+            if kind == "user":
+                self.set_current_session(session.id)
             return session
 
-    def create_session(self, name: str | None = None) -> ChatSession:
+    def ensure_system_session(self, session_id: str, title: str) -> Session:
         with self._lock:
-            session_name = (
-                normalize_session_name(name) if name else self._generate_session_name()
+            normalized_id = normalize_session_id(session_id)
+            if self.has_session(normalized_id):
+                session = self.load_session(normalized_id)
+                if session.kind != "system":
+                    raise ValueError(f"Session ID is already used: {normalized_id}")
+                return session
+            return self.create_session(
+                title,
+                session_id=normalized_id,
+                kind="system",
             )
-            path = self._session_path(session_name)
-            if path.exists():
-                raise ValueError(f"Session already exists: {session_name}")
 
-            session = ChatSession(
-                name=session_name,
-                history=[],
-                updated_at=_now_text(),
-                compressed_summary="",
-            )
-            self.save_session(session)
-            self.set_current_session(session.name)
-            return session
-
-    def load_session(self, name: str) -> ChatSession:
+    def load_session(self, session_id: str) -> Session:
         with self._lock:
-            normalized_name = normalize_session_name(name)
-            path = self._session_path(normalized_name)
+            normalized_id = normalize_session_id(session_id)
+            path = self._session_path(normalized_id)
             if not path.exists():
-                raise ValueError(f"Session not found: {normalized_name}")
+                raise ValueError(f"Session not found: {normalized_id}")
+            return self._fold_session(path)
 
-            records = self._read_jsonl_records(path)
-            if not records:
-                raise ValueError(f"Session file is empty: {normalized_name}")
-
-            metadata = records[0]
-            if metadata.get("type") != "session":
-                raise ValueError(f"Invalid session metadata: {normalized_name}")
-
-            history: list[LLMMessage] = []
-            for record in records[1:]:
-                if record.get("type") != "message":
-                    continue
-
-                message_data = dict(record)
-                message_data.pop("type", None)
-                history.append(message_from_dict(message_data))
-
-            return ChatSession(
-                name=str(metadata.get("name", normalized_name)),
-                history=history,
-                updated_at=str(metadata.get("updated_at", "")),
-                compressed_summary=str(metadata.get("compressed_summary", "")),
-                metadata=_read_metadata(metadata.get("metadata")),
-            )
-
-    def save_session(self, session: ChatSession) -> None:
+    def load_current_session(self) -> Session:
         with self._lock:
-            self.base_dir.mkdir(parents=True, exist_ok=True)
-            session.updated_at = _now_text()
+            current_id = self.get_current_session_id()
+            if current_id is not None and self.has_session(current_id):
+                session = self.load_session(current_id)
+                if session.kind == "user":
+                    return session
 
-            records: list[dict[str, Any]] = [
-                {
-                    "type": "session",
-                    "name": session.name,
-                    "updated_at": session.updated_at,
-                    "compressed_summary": session.compressed_summary,
-                    "metadata": dict(session.metadata),
-                }
-            ]
-            for message in session.history:
+            sessions = self.list_sessions()
+            if sessions:
+                self.set_current_session(sessions[0].id)
+                return self.load_session(sessions[0].id)
+            return self.create_session("New session")
+
+    def save_session(self, session: Session) -> None:
+        """Persist visible history and session metadata as append-only events."""
+
+        with self._lock:
+            stored = self.load_session(session.id)
+            now = _now_text()
+            records: list[dict[str, Any]] = []
+
+            if session.title != stored.title:
                 records.append(
                     {
-                        "type": "message",
-                        **message_to_dict(message),
+                        "type": "session.title_changed",
+                        "title": _require_title(session.title),
+                        "created_at": now,
                     }
                 )
+            if session.metadata != stored.metadata:
+                records.append(
+                    {
+                        "type": "session.metadata_replaced",
+                        "metadata": dict(session.metadata),
+                        "created_at": now,
+                    }
+                )
+            records.extend(
+                _surface_records(
+                    "visible",
+                    stored.history,
+                    session.history,
+                    created_at=now,
+                )
+            )
+            self._append_records(self._session_path(session.id), records)
+            if records:
+                session.updated_at = now
 
-            lines = [json.dumps(record, ensure_ascii=False) for record in records]
-            self._session_path(session.name).write_text(
-                "\n".join(lines) + "\n",
-                encoding="utf-8",
+    def save_agent_context(self, session: Session) -> None:
+        """Persist the internal agent context without touching visible history."""
+
+        with self._lock:
+            stored = self.load_session(session.id)
+            now = _now_text()
+            if session.agent_summary != stored.agent_summary:
+                records = [
+                    {
+                        "type": "agent.context_replaced",
+                        "messages": [
+                            message_to_dict(message)
+                            for message in session.agent_history
+                        ],
+                        "summary": session.agent_summary,
+                        "created_at": now,
+                    }
+                ]
+            else:
+                records = _surface_records(
+                    "agent",
+                    stored.agent_history,
+                    session.agent_history,
+                    created_at=now,
+                )
+                for record in records:
+                    if record["type"] == "agent.context_replaced":
+                        record["summary"] = session.agent_summary
+            self._append_records(self._session_path(session.id), records)
+            if records:
+                session.updated_at = now
+
+    def clear_agent_context(self, session_id: str) -> None:
+        with self._lock:
+            session = self.load_session(session_id)
+            if not session.agent_history and not session.agent_summary:
+                return
+            self._append_records(
+                self._session_path(session.id),
+                [
+                    {
+                        "type": "agent.context_replaced",
+                        "messages": [],
+                        "summary": "",
+                        "created_at": _now_text(),
+                    }
+                ],
             )
 
-    def delete_session(self, name: str) -> None:
+    def rename_session(self, session_id: str, title: str) -> Session:
         with self._lock:
-            path = self._session_path(name)
+            session = self.load_session(session_id)
+            session.title = _require_title(title)
+            self.save_session(session)
+            return session
+
+    def delete_session(self, session_id: str) -> None:
+        with self._lock:
+            path = self._session_path(session_id)
             if path.exists():
                 path.unlink()
 
-    def rename_session(self, old_name: str, new_name: str) -> ChatSession:
+    def set_current_session(self, session_id: str) -> None:
         with self._lock:
-            normalized_old_name = normalize_session_name(old_name)
-            normalized_new_name = normalize_session_name(new_name)
-
-            session = self.load_session(normalized_old_name)
-            if normalized_old_name == normalized_new_name:
-                return session
-
-            new_path = self._session_path(normalized_new_name)
-            if new_path.exists():
-                raise ValueError(f"Session already exists: {normalized_new_name}")
-
-            current_name = self.get_current_session_name()
-            old_path = self._session_path(normalized_old_name)
-
-            session.name = normalized_new_name
-            self.save_session(session)
-
-            if old_path.exists():
-                old_path.unlink()
-
-            if current_name == normalized_old_name:
-                self.set_current_session(normalized_new_name)
-
-            return session
-
-    def set_current_session(self, name: str) -> None:
-        with self._lock:
-            self.base_dir.mkdir(parents=True, exist_ok=True)
-            record = {"current_session": normalize_session_name(name)}
-            self.index_file.write_text(
-                json.dumps(record, ensure_ascii=False) + "\n",
-                encoding="utf-8",
+            normalized_id = normalize_session_id(session_id)
+            session = self.load_session(normalized_id)
+            if session.kind != "user":
+                raise ValueError("System sessions cannot be selected")
+            self._append_records(
+                self.state_file,
+                [
+                    {
+                        "type": "current_session.changed",
+                        "session_id": normalized_id,
+                        "created_at": _now_text(),
+                    }
+                ],
             )
 
-    def get_current_session_name(self) -> str | None:
+    def get_current_session_id(self) -> str | None:
         with self._lock:
-            if not self.index_file.exists():
+            if not self.state_file.exists():
                 return None
-
-            records = self._read_jsonl_records(self.index_file)
-            if not records:
-                return None
-
-            current_name = str(records[0].get("current_session", "")).strip()
-            return current_name or None
+            current_id: str | None = None
+            for record in _read_jsonl_records(self.state_file):
+                if record.get("type") == "current_session.changed":
+                    value = str(record.get("session_id", "")).strip()
+                    current_id = value or None
+            return current_id
 
     def list_sessions(self) -> list[SessionInfo]:
         with self._lock:
             if not self.base_dir.exists():
                 return []
-
             sessions: list[SessionInfo] = []
-            for path in sorted(self.base_dir.glob("*.jsonl")):
-                if path.name == self.index_file.name:
+            for path in self.base_dir.glob("*.jsonl"):
+                if path == self.state_file:
                     continue
-
-                records = self._read_jsonl_records(path)
-                if not records:
+                try:
+                    session = self._fold_session(path)
+                except _UnrecognizedSessionLog:
+                    # Old session files and unrelated JSONL files may remain in
+                    # the directory after an upgrade. They are not migrated or
+                    # exposed as sessions.
                     continue
-
-                metadata = records[0]
-                if metadata.get("type") != "session":
+                if session.kind != "user":
                     continue
-
-                message_count = sum(
-                    1 for record in records[1:] if record.get("type") == "message"
-                )
                 sessions.append(
                     SessionInfo(
-                        name=str(metadata.get("name", path.stem)),
-                        message_count=message_count,
-                        updated_at=str(metadata.get("updated_at", "")),
+                        id=session.id,
+                        title=session.title,
+                        message_count=len(session.history),
+                        updated_at=session.updated_at,
                     )
                 )
-
             sessions.sort(key=lambda item: item.updated_at, reverse=True)
             return sessions
 
-    def has_session(self, name: str) -> bool:
-        with self._lock:
-            return self._session_path(name).exists()
+    def has_session(self, session_id: str) -> bool:
+        return self._session_path(session_id).exists()
 
-    def _session_path(self, name: str) -> Path:
-        return self.base_dir / f"{normalize_session_name(name)}.jsonl"
+    def _session_path(self, session_id: str) -> Path:
+        return self.base_dir / f"{normalize_session_id(session_id)}.jsonl"
 
-    def _generate_session_name(self) -> str:
-        prefix = datetime.now().strftime("session-%Y%m%d-%H%M%S")
-        candidate = prefix
-        counter = 1
+    def _fold_session(self, path: Path) -> Session:
+        records = _read_jsonl_records(path)
+        if not records or records[0].get("type") != "session.created":
+            raise _UnrecognizedSessionLog(f"Unrecognized session log: {path.name}")
 
-        while self._session_path(candidate).exists():
-            counter += 1
-            candidate = f"{prefix}-{counter}"
+        created = records[0]
+        version = created.get("schema_version")
+        if version != SESSION_SCHEMA_VERSION:
+            raise ValueError(
+                f"Unsupported session schema {version!r}: {path.name}"
+            )
 
-        return candidate
+        session_id = normalize_session_id(str(created.get("session_id", "")))
+        created_at = str(created.get("created_at", "")) or _now_text()
+        kind_value = str(created.get("kind", "user"))
+        if kind_value not in {"user", "system"}:
+            raise ValueError(f"Invalid session kind in {path.name}")
+        session = Session(
+            id=session_id,
+            title=_require_title(str(created.get("title", ""))),
+            history=[],
+            agent_history=[],
+            created_at=created_at,
+            updated_at=created_at,
+            kind=kind_value,  # type: ignore[arg-type]
+        )
 
-    def _read_jsonl_records(self, path: Path) -> list[dict[str, Any]]:
-        records: list[dict[str, Any]] = []
-        for line in path.read_text(encoding="utf-8").splitlines():
-            cleaned_line = line.strip()
-            if not cleaned_line:
-                continue
+        for record in records[1:]:
+            event_type = record.get("type")
+            if event_type == "session.title_changed":
+                session.title = _require_title(str(record.get("title", "")))
+            elif event_type == "session.metadata_replaced":
+                session.metadata = _read_metadata(record.get("metadata"))
+            elif event_type == "visible.message":
+                session.history.append(_message_from_record(record))
+            elif event_type == "visible.context_replaced":
+                session.history = _messages_from_record(record)
+            elif event_type == "agent.message":
+                session.agent_history.append(_message_from_record(record))
+            elif event_type == "agent.context_replaced":
+                session.agent_history = _messages_from_record(record)
+                session.agent_summary = str(record.get("summary", ""))
+            else:
+                raise ValueError(
+                    f"Unsupported session event {event_type!r} in {path.name}"
+                )
+            session.updated_at = str(record.get("created_at", "")) or session.updated_at
+        return session
 
-            data = json.loads(cleaned_line)
-            if isinstance(data, dict):
-                records.append(data)
-
-        return records
+    def _append_records(self, path: Path, records: list[dict[str, Any]]) -> None:
+        append_jsonl(path, records)
 
 
-def normalize_session_name(name: str) -> str:
-    raw_name = str(name or "").strip()
-    if not raw_name:
-        raise ValueError("Session name cannot be empty")
-
-    normalized = normalize_name_token(raw_name)
-    if not normalized:
-        raise ValueError("Session name must contain letters, digits, hyphen, or underscore")
-
-    return normalized
+def normalize_session_id(session_id: str) -> str:
+    value = str(session_id or "").strip()
+    if not _SESSION_ID_PATTERN.fullmatch(value):
+        raise ValueError(
+            "Session ID must be 1-128 letters, digits, dots, hyphens, or underscores"
+        )
+    return value
 
 
 def message_to_dict(message: LLMMessage) -> dict[str, Any]:
@@ -290,6 +386,8 @@ def message_to_dict(message: LLMMessage) -> dict[str, Any]:
 
 
 def message_from_dict(data: dict[str, Any]) -> LLMMessage:
+    raw_tool_calls = data.get("tool_calls", [])
+    tool_calls = raw_tool_calls if isinstance(raw_tool_calls, list) else []
     return LLMMessage(
         role=str(data.get("role", "user")),  # type: ignore[arg-type]
         content=normalize_message_content(data.get("content", "")),
@@ -301,7 +399,8 @@ def message_from_dict(data: dict[str, Any]) -> LLMMessage:
                 name=str(item.get("name", "")),
                 arguments=str(item.get("arguments", "")),
             )
-            for item in data.get("tool_calls", [])
+            for item in tool_calls
+            if isinstance(item, dict)
         ],
         reasoning_content=str(
             data.get("reasoning_content") or data.get("reasoning") or ""
@@ -310,26 +409,83 @@ def message_from_dict(data: dict[str, Any]) -> LLMMessage:
     )
 
 
+def _surface_records(
+    surface: Literal["visible", "agent"],
+    previous: list[LLMMessage],
+    current: list[LLMMessage],
+    *,
+    created_at: str,
+) -> list[dict[str, Any]]:
+    previous_data = [message_to_dict(message) for message in previous]
+    current_data = [message_to_dict(message) for message in current]
+    if current_data[: len(previous_data)] == previous_data:
+        return [
+            {
+                "type": f"{surface}.message",
+                "message": message,
+                "created_at": created_at,
+            }
+            for message in current_data[len(previous_data) :]
+        ]
+    return [
+        {
+            "type": f"{surface}.context_replaced",
+            "messages": current_data,
+            "created_at": created_at,
+        }
+    ]
+
+
+def _message_from_record(record: dict[str, Any]) -> LLMMessage:
+    message = record.get("message")
+    if not isinstance(message, dict):
+        raise ValueError("Session message event must contain an object")
+    return message_from_dict(message)
+
+
+def _messages_from_record(record: dict[str, Any]) -> list[LLMMessage]:
+    messages = record.get("messages")
+    if not isinstance(messages, list):
+        raise ValueError("Session context event must contain a message list")
+    return [message_from_dict(item) for item in messages if isinstance(item, dict)]
+
+
+def _read_jsonl_records(path: Path) -> list[dict[str, Any]]:
+    return read_jsonl(path, source=path.name)
+
+
+def _normalize_title(title: str | None) -> str:
+    return " ".join(str(title or "").split()).strip()
+
+
+def _require_title(title: str) -> str:
+    value = _normalize_title(title)
+    if not value:
+        raise ValueError("Session title cannot be empty")
+    if len(value) > 200:
+        raise ValueError("Session title cannot exceed 200 characters")
+    return value
+
+
+def _default_title(created_at: str) -> str:
+    timestamp = datetime.fromisoformat(created_at).strftime("Session %Y-%m-%d %H:%M")
+    return timestamp
+
+
 def _read_optional_text(value: Any) -> str | None:
     if value is None:
         return None
-
     text = str(value).strip()
     return text or None
 
 
 def _read_reasoning_field(value: Any) -> str:
-    text = str(value or "").strip()
-    if text == "reasoning":
-        return "reasoning"
-    return "reasoning_content"
+    return "reasoning" if str(value or "").strip() == "reasoning" else "reasoning_content"
 
 
 def _read_metadata(value: Any) -> dict[str, Any]:
-    if not isinstance(value, dict):
-        return {}
-    return dict(value)
+    return dict(value) if isinstance(value, dict) else {}
 
 
 def _now_text() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")
+    return datetime.now().astimezone().isoformat(timespec="microseconds")

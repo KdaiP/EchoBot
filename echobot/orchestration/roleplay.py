@@ -4,9 +4,9 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
-from ..agent import AgentCore
+from ..agent import AgentCore, AgentRequest
 from ..models import FileInput, ImageInput
-from ..runtime.sessions import ChatSession
+from ..runtime.sessions import Session
 from .roles import RoleCard, RoleCardRegistry
 
 
@@ -121,7 +121,7 @@ class RoleplayEngine:
     async def chat_reply(
         self,
         *,
-        session: ChatSession,
+        session: Session,
         user_input: str,
         image_urls: list[ImageInput] | None = None,
         file_attachments: list[FileInput] | None = None,
@@ -136,13 +136,13 @@ class RoleplayEngine:
             extra_system_messages=[
                 _DIRECT_CHAT_INSTRUCTION,
             ],
-            fallback_text="I am here.",
+            fallback_text=None,
         )
 
     async def stream_chat_reply(
         self,
         *,
-        session: ChatSession,
+        session: Session,
         user_input: str,
         image_urls: list[ImageInput] | None = None,
         file_attachments: list[FileInput] | None = None,
@@ -158,14 +158,14 @@ class RoleplayEngine:
             extra_system_messages=[
                 _DIRECT_CHAT_INSTRUCTION,
             ],
-            fallback_text="I am here.",
+            fallback_text=None,
             on_chunk=on_chunk,
         )
 
     async def delegated_ack(
         self,
         *,
-        session: ChatSession,
+        session: Session,
         user_input: str,
         image_urls: list[ImageInput] | None = None,
         file_attachments: list[FileInput] | None = None,
@@ -188,7 +188,7 @@ class RoleplayEngine:
     async def stream_delegated_ack(
         self,
         *,
-        session: ChatSession,
+        session: Session,
         user_input: str,
         image_urls: list[ImageInput] | None = None,
         file_attachments: list[FileInput] | None = None,
@@ -213,7 +213,7 @@ class RoleplayEngine:
     async def present_scheduled_setup_result(
         self,
         *,
-        session: ChatSession,
+        session: Session,
         user_input: str,
         agent_output: str,
         image_urls: list[ImageInput] | None = None,
@@ -242,7 +242,7 @@ class RoleplayEngine:
     async def present_scheduled_notification(
         self,
         *,
-        session: ChatSession,
+        session: Session,
         reminder_text: str,
         role_card: RoleCard,
     ) -> str:
@@ -264,7 +264,7 @@ class RoleplayEngine:
     async def present_agent_result(
         self,
         *,
-        session: ChatSession,
+        session: Session,
         user_input: str,
         agent_output: str,
         image_urls: list[ImageInput] | None = None,
@@ -291,7 +291,7 @@ class RoleplayEngine:
     async def present_agent_failure(
         self,
         *,
-        session: ChatSession,
+        session: Session,
         user_input: str,
         error_text: str,
         image_urls: list[ImageInput] | None = None,
@@ -319,7 +319,7 @@ class RoleplayEngine:
     async def present_user_input_request(
         self,
         *,
-        session: ChatSession,
+        session: Session,
         follow_up_prompt: str,
         choices: list[str] | None = None,
         why_needed: str = "",
@@ -351,13 +351,13 @@ class RoleplayEngine:
     async def _generate(
         self,
         *,
-        session: ChatSession,
+        session: Session,
         user_input: str,
         image_urls: list[ImageInput] | None = None,
         file_attachments: list[FileInput] | None = None,
         role_card: RoleCard,
         extra_system_messages: list[str],
-        fallback_text: str,
+        fallback_text: str | None,
         include_history: bool = True,
         max_tokens: int | None = None,
     ) -> str:
@@ -368,21 +368,26 @@ class RoleplayEngine:
             *extra_system_messages,
         ]
         try:
-            response = await self._role_agent.ask(
-                user_input,
-                image_urls=image_urls,
-                file_attachments=file_attachments,
-                history=history,
-                extra_system_messages=system_messages,
-                temperature=self._default_temperature,
-                max_tokens=self._resolve_max_tokens(max_tokens),
+            result = await self._role_agent.run(
+                AgentRequest(
+                    prompt=user_input,
+                    image_urls=image_urls or (),
+                    file_attachments=file_attachments or (),
+                    history=history,
+                    extra_system_messages=system_messages,
+                    temperature=self._default_temperature,
+                    max_tokens=self._resolve_max_tokens(max_tokens),
+                ),
             )
+            response = result.response
         except RuntimeError:
             logger.exception(
                 "Roleplay generation failed for session '%s' with role '%s'",
-                session.name,
+                session.id,
                 role_card.name,
             )
+            if fallback_text is None:
+                raise
             return fallback_text
 
         content = response.message.content_text.strip()
@@ -390,22 +395,26 @@ class RoleplayEngine:
             action = "using fallback text" if not content else "returning truncated text"
             logger.warning(
                 "Roleplay generation hit max_tokens limit for session '%s' with role '%s'; %s",
-                session.name,
+                session.id,
                 role_card.name,
                 action,
             )
-        return content or fallback_text
+        if content:
+            return content
+        if fallback_text is None:
+            raise RuntimeError("Roleplay provider returned an empty response")
+        return fallback_text
 
     async def _stream_generate(
         self,
         *,
-        session: ChatSession,
+        session: Session,
         user_input: str,
         image_urls: list[ImageInput] | None = None,
         file_attachments: list[FileInput] | None = None,
         role_card: RoleCard,
         extra_system_messages: list[str],
-        fallback_text: str,
+        fallback_text: str | None,
         on_chunk: StreamCallback,
         include_history: bool = True,
         max_tokens: int | None = None,
@@ -419,14 +428,16 @@ class RoleplayEngine:
         chunks: list[str] = []
 
         try:
-            async for chunk in self._role_agent.ask_stream(
-                user_input,
-                image_urls=image_urls,
-                file_attachments=file_attachments,
-                history=history,
-                extra_system_messages=system_messages,
-                temperature=self._default_temperature,
-                max_tokens=self._resolve_max_tokens(max_tokens),
+            async for chunk in self._role_agent.stream(
+                AgentRequest(
+                    prompt=user_input,
+                    image_urls=image_urls or (),
+                    file_attachments=file_attachments or (),
+                    history=history,
+                    extra_system_messages=system_messages,
+                    temperature=self._default_temperature,
+                    max_tokens=self._resolve_max_tokens(max_tokens),
+                ),
             ):
                 if not chunk:
                     continue
@@ -435,9 +446,11 @@ class RoleplayEngine:
         except RuntimeError:
             logger.exception(
                 "Roleplay streaming failed for session '%s' with role '%s'",
-                session.name,
+                session.id,
                 role_card.name,
             )
+            if fallback_text is None:
+                raise
             partial_text = "".join(chunks).strip()
             if partial_text:
                 return partial_text
@@ -456,6 +469,8 @@ class RoleplayEngine:
         content = "".join(chunks).strip()
         if content:
             return content
+        if fallback_text is None:
+            raise RuntimeError("Roleplay provider returned an empty response")
         return await self._emit_fallback_text(fallback_text, on_chunk)
 
     def _resolve_max_tokens(self, max_tokens: int | None) -> int | None:

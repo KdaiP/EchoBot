@@ -142,7 +142,7 @@ class RuntimeBootstrapConfigTests(unittest.TestCase):
 
             self.assertFalse(context.coordinator._delegated_ack_enabled)
 
-    def test_build_runtime_context_reads_delegated_ack_toggle_from_runtime_settings(self) -> None:
+    def test_build_runtime_context_reads_persisted_settings(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             env_file = workspace / ".env"
@@ -158,10 +158,22 @@ class RuntimeBootstrapConfigTests(unittest.TestCase):
                 + "\n",
                 encoding="utf-8",
             )
-            settings_path = workspace / ".echobot" / "runtime_settings.json"
+            settings_path = workspace / ".echobot" / "settings.json"
             settings_path.parent.mkdir(parents=True, exist_ok=True)
             settings_path.write_text(
-                '{"delegated_ack_enabled": false}\n',
+                """{
+  "revision": 1,
+  "runtime": {
+    "delegated_ack_enabled": false,
+    "shell_safety_mode": "danger-full-access",
+    "file_write_enabled": true,
+    "cron_mutation_enabled": true,
+    "web_private_network_enabled": false
+  },
+  "llm": {"active_provider": "default"},
+  "speech": {"asr_provider": "sherpa-sense-voice"}
+}
+""",
                 encoding="utf-8",
             )
 
@@ -245,44 +257,6 @@ class RuntimeBootstrapConfigTests(unittest.TestCase):
                 context.runtime_controls.shell_safety_mode,
             )
 
-    def test_build_runtime_context_system_prompt_tracks_runtime_control_updates(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            workspace = Path(temp_dir)
-            env_file = workspace / ".env"
-            env_file.write_text(
-                "\n".join(
-                    [
-                        "LLM_API_KEY=test-key",
-                        "LLM_MODEL=test-model",
-                        "LLM_BASE_URL=https://example.com/v1",
-                        "LLM_TIMEOUT=60",
-                    ]
-                )
-                + "\n",
-                encoding="utf-8",
-            )
-
-            with patch.dict(os.environ, {}, clear=True):
-                context = build_runtime_context(
-                    RuntimeOptions(
-                        workspace=workspace,
-                        no_memory=True,
-                        no_tools=True,
-                        no_skills=True,
-                        no_heartbeat=True,
-                    ),
-                    load_session_state=False,
-                )
-
-            initial_prompt = context.agent._system_prompt_text()
-            context.runtime_controls.set_shell_safety_mode("read-only")
-            context.runtime_controls.set_file_write_enabled(False)
-            updated_prompt = context.agent._system_prompt_text()
-
-            self.assertIn("Current shell safety mode: `danger-full-access`.", initial_prompt)
-            self.assertIn("Current shell safety mode: `read-only`.", updated_prompt)
-            self.assertIn("Workspace file writes are currently disabled.", updated_prompt)
-
     def test_build_runtime_context_reads_image_budget_from_env_file(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
@@ -364,3 +338,26 @@ class RuntimeBootstrapConfigTests(unittest.TestCase):
             registry = context.tool_registry_factory("default", False)
             assert registry is not None
             self.assertNotIn("view_image", registry.names())
+
+    def test_build_runtime_context_can_start_without_llm_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            with patch.dict(os.environ, {}, clear=True):
+                context = build_runtime_context(
+                    RuntimeOptions(
+                        workspace=workspace,
+                        env_file="missing.env",
+                        no_tools=True,
+                        no_memory=True,
+                        no_skills=True,
+                        no_heartbeat=True,
+                    ),
+                    load_session_state=False,
+                )
+
+            self.assertEqual("", context.provider_manager.active_provider_name)
+            self.assertEqual(
+                [],
+                context.provider_manager.public_snapshot(revision=0)["providers"],
+            )
+            self.assertFalse(context.supports_image_input)

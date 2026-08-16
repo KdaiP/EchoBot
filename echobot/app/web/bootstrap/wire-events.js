@@ -7,6 +7,7 @@ export function wireAppEvents(features) {
         chat,
         layout,
         live2d,
+        llmProviders,
         roles,
         sessions,
         tts,
@@ -71,6 +72,17 @@ export function wireAppEvents(features) {
     DOM.voiceSelect.addEventListener("change", tts.handleVoiceSelectionChange);
     bindOptionalAsyncChange(DOM.ttsProviderSelect, tts.handleTtsProviderChange);
     bindOptionalAsyncChange(DOM.asrProviderSelect, asr.handleAsrProviderChange);
+    bindOptionalAsyncChange(DOM.llmProviderSelect, layout.handleLlmProviderChange);
+    bindOptionalClick(DOM.llmProviderManageButton, llmProviders.openDialog);
+    bindOptionalClick(DOM.llmProviderDialogClose, llmProviders.closeDialog);
+    bindOptionalChange(DOM.llmProviderEditorSelect, llmProviders.handleEditorSelection);
+    bindOptionalClick(DOM.llmProviderNewButton, llmProviders.startCreate);
+    bindOptionalClick(DOM.llmProviderDeleteButton, llmProviders.deleteProvider);
+    bindOptionalChange(DOM.llmProviderPresetSelect, llmProviders.applyPreset);
+    bindOptionalClick(DOM.llmProviderTestButton, llmProviders.testProvider);
+    bindOptionalClick(DOM.llmProviderDiscoverButton, llmProviders.discoverModels);
+    bindOptionalClick(DOM.llmProviderUseButton, llmProviders.useProvider);
+    bindOptionalEventHandler(DOM.llmProviderForm, "input", llmProviders.handleFormInput);
     bindOptionalAsyncChange(DOM.modelSelect, () => live2d.handleLive2DModelChange(DOM.modelSelect.value));
     bindOptionalClick(DOM.live2dUploadButton, () => DOM.live2dUploadInput?.click());
     bindOptionalInputChange(DOM.live2dUploadInput, live2d.handleLive2DDirectoryUpload);
@@ -185,7 +197,7 @@ export function wireAppEvents(features) {
         tts.stopSpeechPlayback();
         status.setRunStatus("已停止语音");
     });
-    bindOptionalClick(DOM.stopAgentButton, chat.handleStopBackgroundJob);
+    bindOptionalClick(DOM.stopAgentButton, chat.handleStopAgentRun);
     bindOptionalClick(DOM.recordButton, asr.handleRecordButtonClick);
     bindOptionalAsyncChange(DOM.alwaysListenCheckbox, asr.handleAlwaysListenToggle);
     bindOptionalToggle(DOM.cronPanel, layout.handleCronPanelToggle);

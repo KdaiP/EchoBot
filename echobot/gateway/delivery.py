@@ -15,15 +15,15 @@ DEFAULT_DELIVERY_STORE_PATH = Path(".echobot/delivery.json")
 @dataclass(slots=True)
 class DeliveryState:
     routes: dict[str, DeliveryTarget] = field(default_factory=dict)
-    latest_session_name: str | None = None
+    latest_session_id: str | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
             "routes": {
-                session_name: target.to_dict()
-                for session_name, target in self.routes.items()
+                session_id: target.to_dict()
+                for session_id, target in self.routes.items()
             },
-            "latest_session_name": self.latest_session_name,
+            "latest_session_id": self.latest_session_id,
         }
 
     @classmethod
@@ -31,15 +31,15 @@ class DeliveryState:
         raw_routes = data.get("routes", {})
         routes: dict[str, DeliveryTarget] = {}
         if isinstance(raw_routes, dict):
-            for session_name, target_data in raw_routes.items():
-                if isinstance(session_name, str) and isinstance(target_data, dict):
-                    routes[session_name] = DeliveryTarget.from_dict(target_data)
-        latest_session_name = data.get("latest_session_name")
-        if not isinstance(latest_session_name, str):
-            latest_session_name = None
+            for session_id, target_data in raw_routes.items():
+                if isinstance(session_id, str) and isinstance(target_data, dict):
+                    routes[session_id] = DeliveryTarget.from_dict(target_data)
+        latest_session_id = data.get("latest_session_id")
+        if not isinstance(latest_session_id, str):
+            latest_session_id = None
         return cls(
             routes=routes,
-            latest_session_name=latest_session_name,
+            latest_session_id=latest_session_id,
         )
 
 
@@ -55,56 +55,44 @@ class DeliveryStore:
 
     def remember(
         self,
-        session_name: str,
+        session_id: str,
         address: ChannelAddress,
         metadata: dict[str, object] | None = None,
     ) -> None:
         with self._lock:
             self._ensure_loaded()
-            self._state.routes[session_name] = DeliveryTarget(
+            self._state.routes[session_id] = DeliveryTarget(
                 address=copy.deepcopy(address),
                 metadata=dict(metadata or {}),
             )
-            self._state.latest_session_name = session_name
+            self._state.latest_session_id = session_id
             self._save()
 
-    def get_session_target(self, session_name: str) -> DeliveryTarget | None:
+    def get_session_target(self, session_id: str) -> DeliveryTarget | None:
         with self._lock:
             self._ensure_loaded()
-            target = self._state.routes.get(session_name)
+            target = self._state.routes.get(session_id)
             return copy.deepcopy(target) if target is not None else None
 
     def get_latest_target(self) -> DeliveryTarget | None:
         with self._lock:
             self._ensure_loaded()
-            if not self._state.latest_session_name:
+            if not self._state.latest_session_id:
                 return None
-            return self.get_session_target(self._state.latest_session_name)
+            return self.get_session_target(self._state.latest_session_id)
 
-    def forget(self, session_name: str) -> None:
+    def forget(self, session_id: str) -> None:
         with self._lock:
             self._ensure_loaded()
-            removed = self._state.routes.pop(session_name, None)
+            removed = self._state.routes.pop(session_id, None)
             if removed is None:
                 return
-            if self._state.latest_session_name == session_name:
+            if self._state.latest_session_id == session_id:
                 if self._state.routes:
-                    self._state.latest_session_name = list(self._state.routes)[-1]
+                    self._state.latest_session_id = list(self._state.routes)[-1]
                 else:
-                    self._state.latest_session_name = None
+                    self._state.latest_session_id = None
             self._save()
-
-    def replace_session_name(self, old_name: str, new_name: str) -> bool:
-        with self._lock:
-            self._ensure_loaded()
-            target = self._state.routes.pop(old_name, None)
-            if target is None:
-                return False
-            self._state.routes[new_name] = target
-            if self._state.latest_session_name == old_name:
-                self._state.latest_session_name = new_name
-            self._save()
-            return True
 
     def _ensure_loaded(self) -> None:
         if self._loaded:

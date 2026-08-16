@@ -4,12 +4,17 @@ import asyncio
 import json
 import logging
 import os
-import re
-import threading
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
-from urllib import error, request
+
+from openai import (
+    APIConnectionError,
+    APIStatusError,
+    APITimeoutError,
+    AsyncOpenAI,
+    OpenAIError,
+)
 
 from ..attachments import ATTACHMENT_URL_PREFIX, AttachmentStore
 from ..models import (
@@ -26,18 +31,25 @@ from ..models import (
 from .base import LLMProvider
 
 logger = logging.getLogger(__name__)
-_THINKING_TAG_PATTERN = re.compile(r"<think>(.*?)</think>", re.DOTALL)
 _REASONING_RESPONSE_FIELDS = ("reasoning_content", "reasoning")
+_DEFAULT_BASE_URL = "https://api.openai.com/v1"
+_DEFAULT_TIMEOUT = 60.0
+_DEFAULT_MAX_RETRIES = 2
+_MAX_ERROR_DETAIL_CHARS = 4000
 
 
 @dataclass(slots=True)
 class OpenAICompatibleSettings:
     api_key: str
     model: str
-    base_url: str = "https://api.openai.com/v1"
-    timeout: float = 60.0
+    base_url: str = _DEFAULT_BASE_URL
+    timeout: float = _DEFAULT_TIMEOUT
+    max_retries: int = _DEFAULT_MAX_RETRIES
     extra_headers: dict[str, str] = field(default_factory=dict)
     extra_body: dict[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        self.base_url = _normalize_base_url(self.base_url)
 
     @classmethod
     def from_env(
@@ -51,19 +63,60 @@ class OpenAICompatibleSettings:
         model_name = f"{prefix}MODEL"
         base_url_name = f"{prefix}BASE_URL"
         timeout_name = f"{prefix}TIMEOUT"
-
+        max_retries_name = f"{prefix}MAX_RETRIES"
+        extra_headers_name = f"{prefix}EXTRA_HEADERS"
         extra_body_name = f"{prefix}EXTRA_BODY"
 
         api_key = _get_required_env(source, api_key_name)
         model = _get_required_env(source, model_name)
-        base_url = _get_optional_env(source, base_url_name, default=cls.base_url)
-        timeout_text = _get_optional_env(source, timeout_name, default=str(cls.timeout))
+        base_url = _get_optional_env(
+            source,
+            base_url_name,
+            default=_DEFAULT_BASE_URL,
+        )
+        timeout_text = _get_optional_env(
+            source,
+            timeout_name,
+            default=str(_DEFAULT_TIMEOUT),
+        )
+        max_retries_text = _get_optional_env(
+            source,
+            max_retries_name,
+            default=str(_DEFAULT_MAX_RETRIES),
+        )
+        extra_headers_text = _get_optional_env(source, extra_headers_name)
         extra_body_text = _get_optional_env(source, extra_body_name)
 
         try:
             timeout = float(timeout_text)
         except ValueError as exc:
             raise ValueError(f"{timeout_name} must be a number") from exc
+        if timeout <= 0:
+            raise ValueError(f"{timeout_name} must be greater than zero")
+
+        try:
+            max_retries = int(max_retries_text)
+        except ValueError as exc:
+            raise ValueError(f"{max_retries_name} must be an integer") from exc
+        if max_retries < 0:
+            raise ValueError(f"{max_retries_name} must be zero or greater")
+
+        extra_headers: dict[str, str] = {}
+        if extra_headers_text is not None:
+            try:
+                parsed_headers = json.loads(extra_headers_text)
+            except json.JSONDecodeError as exc:
+                raise ValueError(f"{extra_headers_name} must be valid JSON") from exc
+            if not isinstance(parsed_headers, dict):
+                raise ValueError(f"{extra_headers_name} must be a JSON object")
+            if not all(
+                isinstance(name, str) and isinstance(value, str)
+                for name, value in parsed_headers.items()
+            ):
+                raise ValueError(
+                    f"{extra_headers_name} keys and values must be strings"
+                )
+            extra_headers = parsed_headers
 
         extra_body: dict[str, Any] = {}
         if extra_body_text is not None:
@@ -80,6 +133,8 @@ class OpenAICompatibleSettings:
             model=model,
             base_url=base_url,
             timeout=timeout,
+            max_retries=max_retries,
+            extra_headers=extra_headers,
             extra_body=extra_body,
         )
 
@@ -90,21 +145,46 @@ class OpenAICompatibleProvider(LLMProvider):
         settings: OpenAICompatibleSettings,
         *,
         attachment_store: AttachmentStore | None = None,
+        client: AsyncOpenAI | None = None,
     ) -> None:
         self.settings = settings
         self._attachment_store = attachment_store
+        self._client = client
+
+    async def close(self) -> None:
+        if self._client is not None:
+            await self._client.close()
+            self._client = None
+
+    async def list_models(self) -> list[str]:
+        try:
+            result = await self._get_client().models.list()
+        except APIStatusError as exc:
+            raise _status_error(exc) from exc
+        except APITimeoutError as exc:
+            raise RuntimeError(f"LLM provider request timed out: {exc}") from exc
+        except APIConnectionError as exc:
+            raise RuntimeError(f"LLM provider network error: {exc}") from exc
+        except OpenAIError as exc:
+            raise RuntimeError(f"LLM provider request failed: {exc}") from exc
+
+        model_ids = {
+            str(getattr(model, "id", "") or "").strip()
+            for model in result.data
+        }
+        return sorted(model_id for model_id in model_ids if model_id)
 
     async def generate(
         self,
-        messages: list[LLMMessage],
+        messages: Sequence[LLMMessage],
         *,
-        tools: list[LLMTool] | None = None,
+        tools: Sequence[LLMTool] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> LLMResponse:
         payload = await asyncio.to_thread(
-            self._build_payload,
+            self._build_payload_sync,
             messages=messages,
             tools=tools,
             tool_choice=tool_choice,
@@ -112,74 +192,71 @@ class OpenAICompatibleProvider(LLMProvider):
             max_tokens=max_tokens,
         )
 
-        response_data = await asyncio.to_thread(self._post_json, payload)
+        try:
+            completion = await self._get_client().chat.completions.create(
+                **payload,
+                extra_body=self.settings.extra_body or None,
+            )
+        except APIStatusError as exc:
+            raise _status_error(exc) from exc
+        except APITimeoutError as exc:
+            raise RuntimeError(f"LLM provider request timed out: {exc}") from exc
+        except APIConnectionError as exc:
+            raise RuntimeError(f"LLM provider network error: {exc}") from exc
+        except OpenAIError as exc:
+            raise RuntimeError(f"LLM provider request failed: {exc}") from exc
+
+        response_data = _model_to_dict(completion)
         return self._parse_response(response_data)
 
     async def stream_generate(
         self,
-        messages: list[LLMMessage],
+        messages: Sequence[LLMMessage],
         *,
-        tools: list[LLMTool] | None = None,
-        tool_choice: str | dict[str, Any] | None = None,
         temperature: float | None = None,
         max_tokens: int | None = None,
     ) -> AsyncIterator[str]:
-        if tools:
-            response = await self.generate(
-                messages,
-                tools=tools,
-                tool_choice=tool_choice,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            content = message_content_to_text(response.message.content)
-            if content:
-                yield content
-            return
-
         payload = await asyncio.to_thread(
-            self._build_payload,
+            self._build_payload_sync,
             messages=messages,
             tools=None,
-            tool_choice=tool_choice,
+            tool_choice=None,
             temperature=temperature,
             max_tokens=max_tokens,
         )
         payload["stream"] = True
 
-        loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[object] = asyncio.Queue()
-        stream_end = object()
+        try:
+            stream = await self._get_client().chat.completions.create(
+                **payload,
+                extra_body=self.settings.extra_body or None,
+            )
+            async with stream:
+                async for chunk in stream:
+                    if not chunk.choices:
+                        continue
+                    choice = chunk.choices[0]
+                    if choice.finish_reason == "length":
+                        logger.warning(
+                            "LLM stream hit max_tokens limit for model '%s'",
+                            self.settings.model,
+                        )
+                    if choice.delta.content:
+                        yield choice.delta.content
+        except APIStatusError as exc:
+            raise _status_error(exc) from exc
+        except APITimeoutError as exc:
+            raise RuntimeError(f"LLM provider request timed out: {exc}") from exc
+        except APIConnectionError as exc:
+            raise RuntimeError(f"LLM provider network error: {exc}") from exc
+        except OpenAIError as exc:
+            raise RuntimeError(f"LLM provider request failed: {exc}") from exc
 
-        def worker() -> None:
-            try:
-                for chunk in self._stream_text_chunks(payload):
-                    loop.call_soon_threadsafe(queue.put_nowait, chunk)
-            except Exception as exc:  # pragma: no cover - thread forwarding
-                loop.call_soon_threadsafe(queue.put_nowait, exc)
-            finally:
-                loop.call_soon_threadsafe(queue.put_nowait, stream_end)
-
-        thread = threading.Thread(
-            target=worker,
-            name="echobot-openai-stream",
-            daemon=True,
-        )
-        thread.start()
-
-        while True:
-            item = await queue.get()
-            if item is stream_end:
-                break
-            if isinstance(item, Exception):
-                raise item
-            yield str(item)
-
-    def _build_payload(
+    def _build_payload_sync(
         self,
         *,
-        messages: list[LLMMessage],
-        tools: list[LLMTool] | None,
+        messages: Sequence[LLMMessage],
+        tools: Sequence[LLMTool] | None,
         tool_choice: str | dict[str, Any] | None,
         temperature: float | None,
         max_tokens: int | None,
@@ -200,9 +277,6 @@ class OpenAICompatibleProvider(LLMProvider):
             payload["temperature"] = temperature
         if max_tokens is not None:
             payload["max_tokens"] = max_tokens
-
-        if self.settings.extra_body:
-            payload.update(self.settings.extra_body)
 
         return payload
 
@@ -277,61 +351,6 @@ class OpenAICompatibleProvider(LLMProvider):
             "Use the available file or workspace tools if you need to inspect it."
         )
 
-    def _post_json(self, payload: dict[str, Any]) -> dict[str, Any]:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        url = f"{self.settings.base_url.rstrip('/')}/chat/completions"
-        http_request = request.Request(
-            url=url,
-            data=body,
-            headers=self._request_headers(),
-            method="POST",
-        )
-
-        try:
-            with request.urlopen(http_request, timeout=self.settings.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"LLM provider request failed: status={exc.code}, detail={detail}"
-            ) from exc
-        except error.URLError as exc:
-            raise RuntimeError(f"LLM provider network error: {exc.reason}") from exc
-
-    def _stream_text_chunks(self, payload: dict[str, Any]) -> Iterator[str]:
-        body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        url = f"{self.settings.base_url.rstrip('/')}/chat/completions"
-        http_request = request.Request(
-            url=url,
-            data=body,
-            headers=self._request_headers(),
-            method="POST",
-        )
-
-        try:
-            with request.urlopen(http_request, timeout=self.settings.timeout) as response:
-                for raw_line in response:
-                    line = raw_line.decode("utf-8", errors="replace").strip()
-                    if not line or not line.startswith("data:"):
-                        continue
-
-                    payload_text = line[5:].strip()
-                    if not payload_text:
-                        continue
-                    if payload_text == "[DONE]":
-                        break
-
-                    chunk_text = self._parse_stream_chunk(payload_text)
-                    if chunk_text:
-                        yield chunk_text
-        except error.HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(
-                f"LLM provider request failed: status={exc.code}, detail={detail}"
-            ) from exc
-        except error.URLError as exc:
-            raise RuntimeError(f"LLM provider network error: {exc.reason}") from exc
-
     def _parse_response(self, data: dict[str, Any]) -> LLMResponse:
         choices = data.get("choices")
         if not choices:
@@ -355,10 +374,7 @@ class OpenAICompatibleProvider(LLMProvider):
             )
 
         content = message_data.get("content") or ""
-        content, tag_reasoning = _extract_thinking_tags_from_content(content)
         reasoning_content, reasoning_field = _extract_reasoning_content(message_data)
-        if not reasoning_content:
-            reasoning_content = tag_reasoning
 
         assistant_message = LLMMessage(
             role=message_data.get("role", "assistant"),
@@ -377,55 +393,59 @@ class OpenAICompatibleProvider(LLMProvider):
             raw_response=data,
         )
 
-    def _request_headers(self) -> dict[str, str]:
-        return {
-            "Authorization": f"Bearer {self.settings.api_key}",
-            "Content-Type": "application/json; charset=utf-8",
-            **self.settings.extra_headers,
-        }
-
-    def _parse_stream_chunk(self, payload_text: str) -> str:
-        try:
-            data = json.loads(payload_text)
-        except json.JSONDecodeError as exc:
-            raise RuntimeError(
-                f"LLM provider stream returned invalid JSON: {payload_text}"
-            ) from exc
-
-        error_payload = data.get("error")
-        if isinstance(error_payload, dict):
-            detail = error_payload.get("message") or payload_text
-            raise RuntimeError(f"LLM provider stream error: {detail}")
-
-        choices = data.get("choices")
-        if not choices:
-            return ""
-
-        choice = choices[0]
-        if choice.get("finish_reason") == "length":
-            logger.warning(
-                "LLM stream hit max_tokens limit for model '%s'",
-                self.settings.model,
+    def _get_client(self) -> AsyncOpenAI:
+        if self._client is None:
+            self._client = AsyncOpenAI(
+                api_key=self.settings.api_key,
+                base_url=self.settings.base_url,
+                timeout=self.settings.timeout,
+                max_retries=self.settings.max_retries,
+                default_headers=self.settings.extra_headers or None,
             )
-        delta = choice.get("delta")
-        if not isinstance(delta, dict):
-            return ""
+        return self._client
 
-        content = delta.get("content")
-        if isinstance(content, str):
-            content, _reasoning_content = _extract_thinking_tags_from_content(content)
-            return content
-        return ""
+def _model_to_dict(model: Any) -> dict[str, Any]:
+    model_dump = getattr(model, "model_dump", None)
+    if not callable(model_dump):
+        raise RuntimeError(
+            f"LLM provider returned unsupported response type: {type(model).__name__}"
+        )
+
+    data = model_dump(mode="json")
+    if not isinstance(data, dict):
+        raise RuntimeError("LLM provider response must be a JSON object")
+    return data
 
 
-def _merge_system_messages(messages: list[LLMMessage]) -> list[LLMMessage]:
+def _status_error(exc: APIStatusError) -> RuntimeError:
+    detail = exc.body
+    if isinstance(detail, (dict, list)):
+        detail_text = json.dumps(detail, ensure_ascii=False)
+    elif detail is None:
+        detail_text = str(exc)
+    else:
+        detail_text = str(detail)
+
+    detail_text = detail_text.strip()
+    if len(detail_text) > _MAX_ERROR_DETAIL_CHARS:
+        omitted_chars = len(detail_text) - _MAX_ERROR_DETAIL_CHARS
+        detail_text = (
+            f"{detail_text[:_MAX_ERROR_DETAIL_CHARS]}"
+            f"... [truncated {omitted_chars} chars]"
+        )
+    return RuntimeError(
+        f"LLM provider request failed: status={exc.status_code}, detail={detail_text}"
+    )
+
+
+def _merge_system_messages(messages: Sequence[LLMMessage]) -> list[LLMMessage]:
     """Merge consecutive leading system messages into one.
 
     Some backends (e.g. vLLM) reject requests that contain more than one
     system message or a system message that is not at position 0.
     """
     if not messages:
-        return messages
+        return []
 
     system_parts: list[str] = []
     rest_start = 0
@@ -437,7 +457,7 @@ def _merge_system_messages(messages: list[LLMMessage]) -> list[LLMMessage]:
             break
 
     if len(system_parts) <= 1:
-        return messages
+        return list(messages)
 
     merged = LLMMessage(role="system", content="\n\n".join(system_parts))
     return [merged, *messages[rest_start:]]
@@ -451,44 +471,12 @@ def _extract_reasoning_content(data: dict[str, Any]) -> tuple[str, str]:
     return "", "reasoning_content"
 
 
-def _extract_thinking_tags_from_content(content: Any) -> tuple[Any, str]:
-    if isinstance(content, str):
-        matches = _THINKING_TAG_PATTERN.findall(content)
-        if not matches:
-            if "</think>" in content:
-                return re.sub(r"</think>\s*$", "", content).strip(), ""
-            return content, ""
-
-        reasoning_content = "\n".join(match.strip() for match in matches if match.strip())
-        cleaned_content = _THINKING_TAG_PATTERN.sub("", content)
-        cleaned_content = re.sub(r"</think>\s*$", "", cleaned_content).strip()
-        return cleaned_content, reasoning_content
-
-    if not isinstance(content, list):
-        return content, ""
-
-    cleaned_blocks: list[Any] = []
-    reasoning_parts: list[str] = []
-    for block in content:
-        if not isinstance(block, dict):
-            cleaned_blocks.append(block)
-            continue
-
-        block_type = str(block.get("type", "")).strip()
-        if block_type == "think":
-            think = str(block.get("think", "")).strip()
-            if think:
-                reasoning_parts.append(think)
-            continue
-        if block_type == "reasoning":
-            reasoning = str(block.get("reasoning") or block.get("text") or "").strip()
-            if reasoning:
-                reasoning_parts.append(reasoning)
-            continue
-
-        cleaned_blocks.append(block)
-
-    return cleaned_blocks, "\n".join(reasoning_parts)
+def _normalize_base_url(base_url: str) -> str:
+    normalized = base_url.strip().rstrip("/")
+    for suffix in ("/chat/completions", "/chat"):
+        if normalized.lower().endswith(suffix):
+            return normalized[: -len(suffix)].rstrip("/")
+    return normalized
 
 
 def _get_required_env(source: Mapping[str, str], name: str) -> str:

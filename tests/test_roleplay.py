@@ -6,7 +6,7 @@ from pathlib import Path
 from echobot import AgentCore, LLMMessage, LLMResponse
 from echobot.orchestration import RoleCardRegistry, RoleplayEngine
 from echobot.providers.base import LLMProvider
-from echobot.runtime.sessions import ChatSession
+from echobot.runtime.sessions import Session
 
 
 _HISTORY_MARKER = "OLD_HISTORY_MARKER"
@@ -150,22 +150,22 @@ class RoleplayEngineTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual("history-present", result)
 
-    async def test_chat_reply_logs_failure_before_returning_fallback(self) -> None:
+    async def test_chat_reply_logs_and_propagates_failure(self) -> None:
         engine, role_card = self._build_engine(FailingProvider())
         session = self._session_with_history()
 
         with self.assertLogs("echobot.orchestration.roleplay", level="ERROR") as logs:
-            result = await engine.chat_reply(
-                session=session,
-                user_input="继续聊天",
-                role_card=role_card,
-            )
+            with self.assertRaisesRegex(RuntimeError, "roleplay exploded"):
+                await engine.chat_reply(
+                    session=session,
+                    user_input="继续聊天",
+                    role_card=role_card,
+                )
 
-        self.assertEqual("I am here.", result)
         self.assertIn("Roleplay generation failed", logs.output[0])
         self.assertEqual("roleplay exploded", str(logs.records[0].exc_info[1]))
 
-    async def test_stream_chat_reply_logs_failure_before_returning_fallback(self) -> None:
+    async def test_stream_chat_reply_logs_and_propagates_failure(self) -> None:
         engine, role_card = self._build_engine(EmptyAfterStreamFailureProvider())
         session = self._session_with_history()
         chunks: list[str] = []
@@ -174,14 +174,14 @@ class RoleplayEngineTests(unittest.IsolatedAsyncioTestCase):
             chunks.append(chunk)
 
         with self.assertLogs("echobot.orchestration.roleplay", level="ERROR") as logs:
-            result = await engine.stream_chat_reply(
-                session=session,
-                user_input="继续聊天",
-                role_card=role_card,
-                on_chunk=on_chunk,
-            )
+            with self.assertRaisesRegex(RuntimeError, "stream roleplay exploded"):
+                await engine.stream_chat_reply(
+                    session=session,
+                    user_input="继续聊天",
+                    role_card=role_card,
+                    on_chunk=on_chunk,
+                )
 
-        self.assertEqual("I am here.", result)
         self.assertEqual([], chunks)
         self.assertIn("Roleplay streaming failed", logs.output[0])
         self.assertEqual("stream roleplay exploded", str(logs.records[0].exc_info[1]))
@@ -229,12 +229,15 @@ class RoleplayEngineTests(unittest.IsolatedAsyncioTestCase):
         role_card = role_registry.require(None)
         return engine, role_card
 
-    def _session_with_history(self) -> ChatSession:
-        return ChatSession(
-            name="demo",
+    def _session_with_history(self) -> Session:
+        return Session(
+            id="demo",
+            title="Demo",
             history=[
                 LLMMessage(role="user", content=_HISTORY_MARKER),
                 LLMMessage(role="assistant", content="之前的回复"),
             ],
+            agent_history=[],
+            created_at="",
             updated_at="",
         )

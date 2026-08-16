@@ -8,24 +8,32 @@ from fastapi.responses import FileResponse, Response
 
 from ..schemas import (
     ASRTranscriptionResponse,
+    CreateWebLLMProviderRequest,
+    EditWebLLMProviderRequest,
     TTSRequest,
     TTSVoiceModel,
     TTSVoicesResponse,
+    TestWebLLMProviderRequest,
     UpdateWebASRProviderRequest,
     UpdateWebLive2DAnnotationRequest,
     UpdateWebLive2DHotkeyRequest,
+    UpdateWebLLMProviderRequest,
     UpdateWebRuntimeConfigRequest,
     WebASRConfigModel,
     WebLive2DAnnotationResponse,
     WebConfigResponse,
     WebLive2DConfigModel,
     WebLive2DHotkeyResponse,
+    WebLLMConfigModel,
+    WebLLMModelsResponse,
+    WebLLMProviderTestResponse,
     WebRuntimeConfigModel,
     WebStageConfigModel,
 )
 from ..services.web_console import Live2DUploadFile
 from ..state import get_app_runtime
-from ...runtime.settings import RuntimeSettingsManager
+from ...runtime.settings import SettingsConflictError
+from ...providers import LLMConfigurationConflictError
 
 
 router = APIRouter(tags=["web"])
@@ -40,19 +48,29 @@ async def get_web_config(
 
     current_session = await runtime.session_service.load_current_session()
     role_name = await runtime.context.coordinator.current_role_name(
-        current_session.name,
+        current_session.id,
     )
     route_mode = await runtime.context.coordinator.current_route_mode(
-        current_session.name,
+        current_session.id,
     )
-    runtime_snapshot = await asyncio.to_thread(
-        _runtime_settings_manager(runtime).snapshot,
+    runtime_snapshot = runtime.context.settings_service.runtime_snapshot()
+    settings_revision = runtime.context.settings_service.settings.revision
+    llm_snapshot = runtime.context.provider_manager.public_snapshot(
+        revision=settings_revision,
+        config_revision=(
+            runtime.context.llm_configuration.revision
+            if runtime.context.llm_configuration is not None
+            else 0
+        ),
     )
     payload = await runtime.web_console_service.build_frontend_config(
-        session_name=current_session.name,
+        session_id=current_session.id,
+        session_title=current_session.title,
         role_name=role_name,
         route_mode=route_mode,
         runtime_config=runtime_snapshot,
+        llm_config=llm_snapshot,
+        settings_revision=settings_revision,
     )
     return WebConfigResponse(**payload)
 
@@ -75,9 +93,12 @@ async def update_web_runtime_config(
 
     try:
         snapshot = await asyncio.to_thread(
-            _runtime_settings_manager(runtime).apply_updates,
+            runtime.context.settings_service.apply_runtime_updates,
             updates,
+            expected_revision=request.expected_revision,
         )
+    except SettingsConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except (KeyError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -86,15 +107,19 @@ async def update_web_runtime_config(
 
 @router.post("/web/runtime/reset", response_model=WebRuntimeConfigModel)
 async def reset_web_runtime_config(
+    expected_revision: int | None = Query(default=None),
     runtime=Depends(get_app_runtime),
 ) -> WebRuntimeConfigModel:
     if runtime.context is None:
         raise HTTPException(status_code=503, detail="EchoBot runtime is not ready")
 
-    snapshot = await asyncio.to_thread(
-        _runtime_settings_manager(runtime).reset_overrides,
-        runtime.context.default_runtime_config.to_dict(),
-    )
+    try:
+        snapshot = await asyncio.to_thread(
+            runtime.context.settings_service.reset_runtime,
+            expected_revision=expected_revision,
+        )
+    except SettingsConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return WebRuntimeConfigModel(**snapshot)
 
 
@@ -277,7 +302,8 @@ async def synthesize_tts(
 @router.get("/web/asr/status", response_model=WebASRConfigModel)
 async def get_asr_status(runtime=Depends(get_app_runtime)) -> WebASRConfigModel:
     snapshot = await runtime.web_console_service.asr_service.status_snapshot()
-    return WebASRConfigModel(**asdict(snapshot))
+    revision = runtime.context.settings_service.settings.revision
+    return WebASRConfigModel(**asdict(snapshot), revision=revision)
 
 
 @router.patch("/web/asr/provider", response_model=WebASRConfigModel)
@@ -286,15 +312,161 @@ async def update_asr_provider(
     runtime=Depends(get_app_runtime),
 ) -> WebASRConfigModel:
     try:
-        payload = await runtime.web_console_service.set_selected_asr_provider(
+        payload = await runtime.select_asr_provider(
             request.provider,
+            expected_revision=request.expected_revision,
         )
+    except SettingsConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     return WebASRConfigModel(**payload)
+
+
+@router.get("/web/llm", response_model=WebLLMConfigModel)
+async def get_llm_config(runtime=Depends(get_app_runtime)) -> WebLLMConfigModel:
+    if runtime.context is None:
+        raise HTTPException(status_code=503, detail="EchoBot runtime is not ready")
+    revision = runtime.context.settings_service.settings.revision
+    return WebLLMConfigModel(
+        **runtime.context.provider_manager.public_snapshot(
+            revision=revision,
+            config_revision=(
+                runtime.context.llm_configuration.revision
+                if runtime.context.llm_configuration is not None
+                else 0
+            ),
+        )
+    )
+
+
+@router.patch("/web/llm/provider", response_model=WebLLMConfigModel)
+async def update_llm_provider(
+    request: UpdateWebLLMProviderRequest,
+    runtime=Depends(get_app_runtime),
+) -> WebLLMConfigModel:
+    try:
+        payload = await runtime.select_llm_provider(
+            request.provider,
+            expected_revision=request.expected_revision,
+        )
+    except SettingsConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return WebLLMConfigModel(**payload)
+
+
+@router.post("/web/llm/providers/test", response_model=WebLLMProviderTestResponse)
+async def test_web_llm_provider(
+    request: TestWebLLMProviderRequest,
+    runtime=Depends(get_app_runtime),
+) -> WebLLMProviderTestResponse:
+    try:
+        payload = await runtime.test_llm_provider(
+            request.profile_dict(),
+            api_key=request.api_key,
+            existing_name=request.existing_name,
+        )
+    except (ValueError, RuntimeError) as exc:
+        return WebLLMProviderTestResponse(
+            success=False,
+            message=str(exc),
+        )
+    return WebLLMProviderTestResponse(**payload)
+
+
+@router.post(
+    "/web/llm/providers/discover-models",
+    response_model=WebLLMModelsResponse,
+)
+async def discover_web_llm_models(
+    request: TestWebLLMProviderRequest,
+    runtime=Depends(get_app_runtime),
+) -> WebLLMModelsResponse:
+    try:
+        payload = await runtime.discover_llm_models(
+            request.profile_dict(),
+            api_key=request.api_key,
+            existing_name=request.existing_name,
+        )
+    except (ValueError, RuntimeError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return WebLLMModelsResponse(**payload)
+
+
+@router.post("/web/llm/providers", response_model=WebLLMConfigModel)
+async def create_web_llm_provider(
+    request: CreateWebLLMProviderRequest,
+    runtime=Depends(get_app_runtime),
+) -> WebLLMConfigModel:
+    try:
+        payload = await runtime.create_llm_provider(
+            request.profile_dict(),
+            api_key=request.api_key,
+            expected_config_revision=request.expected_config_revision,
+        )
+    except LLMConfigurationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return WebLLMConfigModel(**payload)
+
+
+@router.patch(
+    "/web/llm/providers/{provider_name}",
+    response_model=WebLLMConfigModel,
+)
+async def edit_web_llm_provider(
+    provider_name: str,
+    request: EditWebLLMProviderRequest,
+    runtime=Depends(get_app_runtime),
+) -> WebLLMConfigModel:
+    try:
+        payload = await runtime.update_llm_provider(
+            provider_name,
+            request.updates_dict(),
+            api_key=request.api_key,
+            clear_api_key=request.clear_api_key,
+            expected_config_revision=request.expected_config_revision,
+        )
+    except LLMConfigurationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return WebLLMConfigModel(**payload)
+
+
+@router.delete(
+    "/web/llm/providers/{provider_name}",
+    response_model=WebLLMConfigModel,
+)
+async def delete_web_llm_provider(
+    provider_name: str,
+    expected_config_revision: int | None = Query(default=None),
+    runtime=Depends(get_app_runtime),
+) -> WebLLMConfigModel:
+    try:
+        payload = await runtime.delete_llm_provider(
+            provider_name,
+            expected_config_revision=expected_config_revision,
+        )
+    except LLMConfigurationConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return WebLLMConfigModel(**payload)
 
 
 @router.post("/web/asr", response_model=ASRTranscriptionResponse)
@@ -380,11 +552,3 @@ async def asr_websocket(websocket: WebSocket) -> None:
                 await websocket.send_json(event)
             except RuntimeError:
                 break
-
-
-def _runtime_settings_manager(runtime) -> RuntimeSettingsManager:
-    return RuntimeSettingsManager(
-        runtime.context.workspace,
-        coordinator=runtime.context.coordinator,
-        runtime_controls=runtime.context.runtime_controls,
-    )

@@ -4,6 +4,7 @@ import {
     asrState,
     audioState,
     chatState,
+    runtimeState,
 } from "../core/store.js";
 import { buildWavBlob, createAsrAudioCaptureController } from "./asr/audio.js";
 import { findAsrProviderStatus, normalizeAsrConfig } from "./asr/config.js";
@@ -60,7 +61,7 @@ export function createAsrModule(deps) {
     function updateVoiceInputControls() {
         const asrReady = Boolean(asrState.asrConfig && asrState.asrConfig.available);
         const manualRecording = asrState.microphoneCaptureMode === "manual";
-        const backgroundJobRunning = Boolean(chatState.activeChatJobId);
+        const agentRunActive = Boolean(chatState.activeAgentRunId);
 
         if (DOM.recordButton) {
             DOM.recordButton.disabled = !manualRecording && (
@@ -79,7 +80,7 @@ export function createAsrModule(deps) {
             DOM.alwaysListenCheckbox.disabled = !asrReady
                 || !(asrState.asrConfig && asrState.asrConfig.always_listen_supported)
                 || manualRecording
-                || (backgroundJobRunning && !asrState.alwaysListenEnabled);
+                || (agentRunActive && !asrState.alwaysListenEnabled);
         }
 
         if (DOM.asrProviderSelect) {
@@ -133,9 +134,11 @@ export function createAsrModule(deps) {
                 },
                 body: JSON.stringify({
                     provider: nextProvider,
+                    expected_revision: runtimeState.settingsRevision,
                 }),
             });
             applyAsrStatus(payload);
+            runtimeState.settingsRevision = Number(payload.revision || 0);
             const providerStatus = findAsrProviderStatus(payload, nextProvider);
             setRunStatus(
                 providerStatus && providerStatus.available

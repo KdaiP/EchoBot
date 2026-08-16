@@ -20,16 +20,16 @@ export function createUiStatusController() {
             DOM.sendButton.disabled = isBusy;
         }
         if (DOM.composerFileButton) {
-            DOM.composerFileButton.disabled = isBusy || Boolean(chatState.activeChatJobId);
+            DOM.composerFileButton.disabled = isBusy || Boolean(chatState.activeAgentRunId);
         }
         if (DOM.composerFileInput) {
-            DOM.composerFileInput.disabled = isBusy || Boolean(chatState.activeChatJobId);
+            DOM.composerFileInput.disabled = isBusy || Boolean(chatState.activeAgentRunId);
         }
         if (DOM.composerImageButton) {
-            DOM.composerImageButton.disabled = isBusy || Boolean(chatState.activeChatJobId);
+            DOM.composerImageButton.disabled = isBusy || Boolean(chatState.activeAgentRunId);
         }
         if (DOM.composerImageInput) {
-            DOM.composerImageInput.disabled = isBusy || Boolean(chatState.activeChatJobId);
+            DOM.composerImageInput.disabled = isBusy || Boolean(chatState.activeAgentRunId);
         }
         if (DOM.sessionCreateButton) {
             DOM.sessionCreateButton.disabled = isBusy || sessionState.sessionLoading;
@@ -41,20 +41,20 @@ export function createUiStatusController() {
             DOM.routeModeSelect.disabled = (
                 isBusy
                 || sessionState.sessionLoading
-                || Boolean(chatState.activeChatJobId)
+                || Boolean(chatState.activeAgentRunId)
             );
         }
 
         features.sessions?.renderSessionList(sessionState.sessions);
         features.roles?.updateRoleActionState();
         features.asr?.updateVoiceInputControls();
-        updateComposerBackgroundJobState();
+        updateAgentRunState();
         features.chat?.refreshComposerAttachments();
     }
 
-    function setActiveBackgroundJob(jobId) {
-        chatState.activeChatJobId = String(jobId || "").trim();
-        updateComposerBackgroundJobState();
+    function setActiveAgentRun(runId) {
+        chatState.activeAgentRunId = String(runId || "").trim();
+        updateAgentRunState();
     }
 
     function setConnectionState(kind, text) {
@@ -72,34 +72,34 @@ export function createUiStatusController() {
         }
     }
 
-    function updateComposerBackgroundJobState() {
-        const backgroundJobRunning = Boolean(chatState.activeChatJobId);
+    function updateAgentRunState() {
+        const agentRunActive = Boolean(chatState.activeAgentRunId);
 
         if (DOM.promptInput) {
-            DOM.promptInput.disabled = backgroundJobRunning;
+            DOM.promptInput.disabled = agentRunActive;
         }
         if (DOM.composerFileButton) {
-            DOM.composerFileButton.disabled = backgroundJobRunning || chatState.chatBusy;
+            DOM.composerFileButton.disabled = agentRunActive || chatState.chatBusy;
         }
         if (DOM.composerFileInput) {
-            DOM.composerFileInput.disabled = backgroundJobRunning || chatState.chatBusy;
+            DOM.composerFileInput.disabled = agentRunActive || chatState.chatBusy;
         }
         if (DOM.composerImageButton) {
-            DOM.composerImageButton.disabled = backgroundJobRunning || chatState.chatBusy;
+            DOM.composerImageButton.disabled = agentRunActive || chatState.chatBusy;
         }
         if (DOM.composerImageInput) {
-            DOM.composerImageInput.disabled = backgroundJobRunning || chatState.chatBusy;
+            DOM.composerImageInput.disabled = agentRunActive || chatState.chatBusy;
         }
         if (DOM.composerStatusBanner) {
-            DOM.composerStatusBanner.hidden = !backgroundJobRunning;
+            DOM.composerStatusBanner.hidden = !agentRunActive;
         }
         if (DOM.stopAgentButton) {
-            DOM.stopAgentButton.disabled = !backgroundJobRunning;
-            DOM.stopAgentButton.classList.toggle("is-active", backgroundJobRunning);
+            DOM.stopAgentButton.disabled = !agentRunActive;
+            DOM.stopAgentButton.classList.toggle("is-active", agentRunActive);
         }
         if (DOM.routeModeSelect) {
             DOM.routeModeSelect.disabled = (
-                backgroundJobRunning
+                agentRunActive
                 || chatState.chatBusy
                 || sessionState.sessionLoading
             );
@@ -111,7 +111,7 @@ export function createUiStatusController() {
 
     return {
         bindFeatures,
-        setActiveBackgroundJob,
+        setActiveAgentRun,
         setChatBusy,
         setConnectionState,
         setRunStatus,

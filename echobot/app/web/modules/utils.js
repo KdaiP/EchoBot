@@ -1,10 +1,3 @@
-import { DEFAULT_SESSION_NAME } from "../core/store.js";
-
-export function normalizeSessionName(value) {
-    const trimmed = String(value || "").trim();
-    return trimmed || DEFAULT_SESSION_NAME;
-}
-
 export function formatTimestamp(value) {
     const text = String(value || "").trim();
     if (!text) {

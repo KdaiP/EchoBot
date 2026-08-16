@@ -1,4 +1,4 @@
-export const DEFAULT_SESSION_NAME = "default";
+export const DEFAULT_SESSION_ID = "";
 export const DEFAULT_LIP_SYNC_IDS = ["ParamMouthOpenY", "PARAM_MOUTH_OPEN_Y", "MouthOpenY"];
 export const CRON_POLL_INTERVAL_MS = 10000;
 export const ASR_STATUS_POLL_INTERVAL_MS = 3000;
@@ -17,13 +17,14 @@ export const messageState = {
 
 export const chatState = {
     chatBusy: false,
-    activeChatJobId: "",
+    activeAgentRunId: "",
     composerImages: [],
     composerFiles: [],
 };
 
 export const sessionState = {
-    currentSessionName: DEFAULT_SESSION_NAME,
+    currentSessionId: DEFAULT_SESSION_ID,
+    currentSessionTitle: "",
     currentSessionUpdatedAt: "",
     currentSessionHistory: [],
     currentRouteMode: "auto",
@@ -57,6 +58,9 @@ export const panelState = {
 };
 
 export const runtimeState = {
+    settingsRevision: 0,
+    llmConfig: null,
+    llmProviderUpdating: false,
     delegatedAckEnabled: true,
     shellSafetyMode: "danger-full-access",
     fileWriteEnabled: true,

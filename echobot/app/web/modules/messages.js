@@ -20,10 +20,20 @@ export function addMessage(kind, content, label, options = {}) {
     container.className = `message message-${kind}`;
     container.dataset.messageId = messageId;
     container.dataset.messageKind = kind;
-    container.setAttribute("role", kind === "system" ? "status" : "group");
+    const isError = options.variant === "error";
+    if (isError) {
+        container.classList.add("message-error");
+    }
+    let messageRole = "group";
+    if (isError) {
+        messageRole = "alert";
+    } else if (kind === "system") {
+        messageRole = "status";
+    }
+    container.setAttribute("role", messageRole);
     container.setAttribute("aria-label", resolveMessageAriaLabel(kind, label));
     if (kind === "system") {
-        container.setAttribute("aria-live", "polite");
+        container.setAttribute("aria-live", isError ? "assertive" : "polite");
     }
 
     const body = document.createElement("div");
@@ -40,6 +50,15 @@ export function addMessage(kind, content, label, options = {}) {
 
 export function addSystemMessage(text) {
     addMessage("system", text, "Status");
+}
+
+export function addErrorMessage(title, error) {
+    const detail = errorMessageText(error);
+    return addMessage("system", detail, title, {
+        variant: "error",
+        errorTitle: String(title || "操作失败"),
+        errorSummary: summarizeError(detail),
+    });
 }
 
 export function updateMessage(messageId, content, label, options = {}) {
@@ -153,6 +172,10 @@ function resolveMessageAriaLabel(kind, label) {
 
 function renderMessageBody(element, kind, content, options = {}) {
     clearMathTypesetting(element);
+    if (options.variant === "error") {
+        renderErrorBody(element, content, options);
+        return;
+    }
     const normalizedContent = normalizeMessageContent(content);
     if (Array.isArray(normalizedContent)) {
         renderStructuredBody(element, kind, normalizedContent, options);
@@ -165,6 +188,75 @@ function renderMessageBody(element, kind, content, options = {}) {
         return;
     }
     renderPlainTextBody(element, normalizedContent);
+}
+
+function renderErrorBody(element, content, options) {
+    const detailText = errorMessageText(content);
+    const card = document.createElement("div");
+    card.className = "message-error-card";
+
+    const icon = document.createElement("span");
+    icon.className = "message-error-icon";
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = "!";
+
+    const main = document.createElement("div");
+    main.className = "message-error-main";
+
+    const title = document.createElement("strong");
+    title.className = "message-error-title";
+    title.textContent = String(options.errorTitle || "操作失败");
+    main.appendChild(title);
+
+    const summary = document.createElement("p");
+    summary.className = "message-error-summary";
+    summary.textContent = String(options.errorSummary || summarizeError(detailText));
+    main.appendChild(summary);
+
+    if (detailText) {
+        const detail = document.createElement("pre");
+        detail.className = "message-error-detail";
+        detail.textContent = detailText;
+        main.appendChild(detail);
+    }
+
+    card.append(icon, main);
+    element.className = "message-text message-text-error";
+    element.replaceChildren(card);
+}
+
+function errorMessageText(error) {
+    if (error instanceof Error) {
+        return String(error.message || error.name || "未知错误").trim();
+    }
+    return String(error || "未知错误").trim();
+}
+
+function summarizeError(detail) {
+    const normalized = String(detail || "").toLowerCase();
+    if (normalized.includes("status=400") || normalized.includes("invalid_request")) {
+        return "请求参数格式不受当前模型服务支持，请检查模型能力或附件格式。";
+    }
+    if (normalized.includes("status=401") || normalized.includes("unauthorized")) {
+        return "模型服务认证失败，请检查 API Key。";
+    }
+    if (normalized.includes("status=403") || normalized.includes("permission")) {
+        return "模型服务拒绝了请求，请检查账号权限。";
+    }
+    if (normalized.includes("status=429") || normalized.includes("rate limit")) {
+        return "模型服务请求过于频繁，请稍后重试。";
+    }
+    if (normalized.includes("timed out") || normalized.includes("timeout")) {
+        return "模型服务响应超时，请稍后重试。";
+    }
+    if (
+        normalized.includes("network error")
+        || normalized.includes("connection refused")
+        || normalized.includes("failed to fetch")
+    ) {
+        return "无法连接模型服务，请检查服务地址和网络连接。";
+    }
+    return "本次请求未能完成，展开下方详情可查看具体原因。";
 }
 
 function resolveMessageRenderMode(kind, options) {

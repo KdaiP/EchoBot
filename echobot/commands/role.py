@@ -54,28 +54,28 @@ def format_role_list(role_names: list[str], *, current_role_name: str) -> str:
 
 async def execute_role_command(
     coordinator: "ConversationCoordinator",
-    session_name: str,
+    session_id: str,
     command: RoleCommand,
 ) -> str:
     if command.action == "help":
         return format_role_help()
 
     if command.action == "list":
-        current_role = await coordinator.current_role_name(session_name)
+        current_role = await coordinator.current_role_name(session_id)
         return format_role_list(
             coordinator.available_roles(),
             current_role_name=current_role,
         )
 
     if command.action == "current":
-        current_role = await coordinator.current_role_name(session_name)
+        current_role = await coordinator.current_role_name(session_id)
         return f"Current role: {current_role}"
 
     if command.action == "set":
         if not command.argument:
             return "Usage: /role set <name>"
         session = await coordinator.set_session_role(
-            session_name,
+            session_id,
             command.argument,
         )
         role_name = session.metadata.get("role_name", "default")

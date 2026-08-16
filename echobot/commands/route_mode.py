@@ -58,14 +58,14 @@ def format_route_mode_help() -> str:
 
 async def execute_route_mode_command(
     coordinator: "ConversationCoordinator",
-    session_name: str,
+    session_id: str,
     command: RouteModeCommand,
 ) -> str:
     if command.action == "help":
         return format_route_mode_help()
 
     if command.action == "current":
-        route_mode = await coordinator.current_route_mode(session_name)
+        route_mode = await coordinator.current_route_mode(session_id)
         return format_current_route_mode(route_mode)
 
     if command.action == "set":
@@ -73,7 +73,7 @@ async def execute_route_mode_command(
         if route_mode is None:
             return "Usage: /route <auto|chat_only|force_agent>"
 
-        await coordinator.set_session_route_mode(session_name, route_mode)
+        await coordinator.set_session_route_mode(session_id, route_mode)
         return f"Switched route mode to: {route_mode}"
 
     return format_route_mode_help()

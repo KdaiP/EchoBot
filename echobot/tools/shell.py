@@ -275,6 +275,10 @@ class CommandExecutionTool(WorkspaceTool):
                 process.communicate(),
                 timeout=timeout,
             )
+        except asyncio.CancelledError:
+            process.kill()
+            await process.communicate()
+            raise
         except asyncio.TimeoutError as exc:
             process.kill()
             await process.communicate()

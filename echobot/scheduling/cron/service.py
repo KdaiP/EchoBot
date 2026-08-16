@@ -296,7 +296,7 @@ def summarize_job(job: CronJob) -> dict[str, object]:
         "enabled": job.enabled,
         "schedule": describe_schedule(job.schedule),
         "payload_kind": job.payload.kind,
-        "session_name": job.payload.session_name,
+        "session_id": job.payload.session_id,
         "next_run_at": job.state.next_run_at,
         "last_run_at": job.state.last_run_at,
         "last_status": job.state.last_status,

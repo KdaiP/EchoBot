@@ -8,10 +8,10 @@ const SKILL_TOOL_NAMES = new Set([
 ]);
 
 export function createTraceModule() {
-    let currentJobId = "";
+    let currentRunId = "";
 
     function resetTracePanel() {
-        currentJobId = "";
+        currentRunId = "";
 
         if (DOM.agentTracePanel) {
             DOM.agentTracePanel.hidden = true;
@@ -30,24 +30,24 @@ export function createTraceModule() {
         }
     }
 
-    function startTracePanel(jobId) {
-        const normalizedJobId = String(jobId || "").trim();
-        if (!normalizedJobId) {
+    function startTracePanel(runId) {
+        const normalizedRunId = String(runId || "").trim();
+        if (!normalizedRunId) {
             resetTracePanel();
             return;
         }
 
-        currentJobId = normalizedJobId;
+        currentRunId = normalizedRunId;
         renderTracePayload({
-            job_id: normalizedJobId,
+            run_id: normalizedRunId,
             status: "running",
             events: [],
         });
     }
 
-    function applyTracePayload(jobId, payload) {
-        const normalizedJobId = String(jobId || "").trim();
-        if (!normalizedJobId || normalizedJobId !== currentJobId) {
+    function applyTracePayload(runId, payload) {
+        const normalizedRunId = String(runId || "").trim();
+        if (!normalizedRunId || normalizedRunId !== currentRunId) {
             return;
         }
         renderTracePayload(payload);

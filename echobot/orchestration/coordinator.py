@@ -3,9 +3,10 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Awaitable, Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, ContextManager
 
 from ..models import (
     FileInput,
@@ -19,15 +20,15 @@ from ..models import (
     message_content_to_text,
 )
 from ..runtime.session_runner import SessionAgentRunner
-from ..runtime.sessions import ChatSession, SessionStore
+from ..runtime.sessions import Session, SessionStore
 from .decision import DecisionEngine
-from .jobs import (
-    JOB_CANCELLED_TEXT,
+from .runs import (
+    RUN_CANCELLED_TEXT,
+    AgentRun,
     CompletionCallback,
-    ConversationJob,
-    ConversationJobStore,
     OrchestratedTurnResult,
-    job_can_retry,
+    RunStore,
+    run_can_retry,
 )
 from .roleplay import RoleplayEngine, ScheduledCronJobInfo, StreamCallback
 from .route_modes import (
@@ -38,7 +39,8 @@ from .route_modes import (
 from .roles import RoleCard, RoleCardRegistry, role_name_from_metadata, set_role_name
 
 
-BackgroundJobFactory = Callable[[], Awaitable[None]]
+BackgroundTaskFactory = Callable[[], Awaitable[None]]
+ProviderScopeFactory = Callable[[], ContextManager[None]]
 AGENT_HANDOFF_MAX_MESSAGES = 6
 AGENT_HANDOFF_MAX_TOTAL_CHARS = 6000
 AGENT_HANDOFF_MAX_MESSAGE_CHARS = 1800
@@ -55,7 +57,8 @@ class ConversationCoordinator:
         roleplay_engine: RoleplayEngine,
         role_registry: RoleCardRegistry,
         delegated_ack_enabled: bool = True,
-        job_store: ConversationJobStore | None = None,
+        run_store: RunStore | None = None,
+        provider_scope: ProviderScopeFactory | None = None,
     ) -> None:
         self._session_store = session_store
         self._agent_runner = agent_runner
@@ -63,11 +66,12 @@ class ConversationCoordinator:
         self._roleplay_engine = roleplay_engine
         self._role_registry = role_registry
         self._delegated_ack_enabled = delegated_ack_enabled
-        self._jobs = job_store or ConversationJobStore()
+        self._runs = run_store or RunStore()
+        self._provider_scope = provider_scope
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._session_locks_guard = asyncio.Lock()
         self._background_tasks: set[asyncio.Task[None]] = set()
-        self._job_tasks: dict[str, asyncio.Task[None]] = {}
+        self._run_tasks: dict[str, asyncio.Task[None]] = {}
         self._deleted_sessions: set[str] = set()
         self._deleted_sessions_guard = asyncio.Lock()
 
@@ -80,7 +84,7 @@ class ConversationCoordinator:
 
     async def handle_user_turn(
         self,
-        session_name: str,
+        session_id: str,
         prompt: str,
         *,
         image_urls: list[ImageInput] | None = None,
@@ -88,24 +92,24 @@ class ConversationCoordinator:
         role_name: str | None = None,
         route_mode: RouteMode | None = None,
         completion_callback: CompletionCallback | None = None,
-        retry_of_job_id: str | None = None,
+        retry_of_run_id: str | None = None,
         attempt: int = 1,
     ) -> OrchestratedTurnResult:
         return await self.handle_user_turn_stream(
-            session_name,
+            session_id,
             prompt,
             image_urls=image_urls,
             file_attachments=file_attachments,
             role_name=role_name,
             route_mode=route_mode,
             completion_callback=completion_callback,
-            retry_of_job_id=retry_of_job_id,
+            retry_of_run_id=retry_of_run_id,
             attempt=attempt,
         )
 
     async def handle_user_turn_stream(
         self,
-        session_name: str,
+        session_id: str,
         prompt: str,
         *,
         image_urls: list[ImageInput] | None = None,
@@ -114,16 +118,49 @@ class ConversationCoordinator:
         route_mode: RouteMode | None = None,
         completion_callback: CompletionCallback | None = None,
         on_chunk: StreamCallback | None = None,
-        retry_of_job_id: str | None = None,
+        retry_of_run_id: str | None = None,
         attempt: int = 1,
     ) -> OrchestratedTurnResult:
-        await self.restore_session(session_name)
+        provider_scope = (
+            self._provider_scope()
+            if self._provider_scope is not None
+            else nullcontext()
+        )
+        with provider_scope:
+            return await self._run_user_turn_stream(
+                session_id,
+                prompt,
+                image_urls=image_urls,
+                file_attachments=file_attachments,
+                role_name=role_name,
+                route_mode=route_mode,
+                completion_callback=completion_callback,
+                on_chunk=on_chunk,
+                retry_of_run_id=retry_of_run_id,
+                attempt=attempt,
+            )
+
+    async def _run_user_turn_stream(
+        self,
+        session_id: str,
+        prompt: str,
+        *,
+        image_urls: list[ImageInput] | None = None,
+        file_attachments: list[FileInput] | None = None,
+        role_name: str | None = None,
+        route_mode: RouteMode | None = None,
+        completion_callback: CompletionCallback | None = None,
+        on_chunk: StreamCallback | None = None,
+        retry_of_run_id: str | None = None,
+        attempt: int = 1,
+    ) -> OrchestratedTurnResult:
+        await self.restore_session(session_id)
         chunk_handler = on_chunk or _discard_stream_chunk
-        lock = await self._session_lock(session_name)
+        lock = await self._session_lock(session_id)
         async with lock:
             session = await asyncio.to_thread(
-                self._session_store.load_or_create_session,
-                session_name,
+                self._session_store.load_session,
+                session_id,
             )
             role_card = self._resolve_turn_role(session, role_name)
             resolved_route_mode = self._resolve_turn_route_mode(session, route_mode)
@@ -168,7 +205,7 @@ class ConversationCoordinator:
                     response_content=response_text,
                     role_name=role_card.name,
                     steps=1,
-                    compressed_summary=session.compressed_summary,
+                    agent_summary=session.agent_summary,
                 )
 
             immediate_response = ""
@@ -203,35 +240,29 @@ class ConversationCoordinator:
             if pending_user_input is not None:
                 session.metadata = _clear_pending_user_input(session.metadata)
             await asyncio.to_thread(self._session_store.save_session, session)
-            create_trace_run_id = getattr(self._agent_runner, "create_trace_run_id", None)
-            trace_run_id = (
-                create_trace_run_id()
-                if callable(create_trace_run_id)
-                else None
-            )
-            job = await self._jobs.create(
-                session_name=session.name,
+            run_id = self._runs.create_run_id()
+            run = await self._runs.create(
+                run_id=run_id,
+                session_id=session.id,
                 prompt=prompt,
                 immediate_response=immediate_response,
                 role_name=role_card.name,
                 route_mode=resolved_route_mode,
                 image_urls=image_urls or [],
                 file_attachments=file_attachments or [],
-                trace_run_id=trace_run_id,
                 attempt=attempt,
-                retry_of_job_id=retry_of_job_id,
+                retry_of_run_id=retry_of_run_id,
             )
-            self._start_background_job(
-                job.job_id,
-                lambda: self._run_agent_job(
-                    job.job_id,
-                    session_name=session.name,
+            self._start_background_run(
+                run.run_id,
+                lambda: self._run_agent_run(
+                    run.run_id,
+                    session_id=session.id,
                     prompt=prompt,
                     image_urls=image_urls,
                     file_attachments=file_attachments,
                     handoff_text=handoff_text,
                     continuation_text=continuation_text,
-                    trace_run_id=trace_run_id,
                     completion_callback=completion_callback,
                 ),
             )
@@ -243,39 +274,39 @@ class ConversationCoordinator:
                 delegated=True,
                 completed=False,
                 response_content=immediate_response,
-                job_id=job.job_id,
-                status=job.status,
+                run_id=run.run_id,
+                status=run.status,
                 role_name=role_card.name,
                 steps=0,
-                compressed_summary=session.compressed_summary,
+                agent_summary=session.agent_summary,
             )
 
-    async def load_session(self, session_name: str) -> ChatSession:
-        lock = await self._session_lock(session_name)
+    async def load_session(self, session_id: str) -> Session:
+        lock = await self._session_lock(session_id)
         async with lock:
             return await asyncio.to_thread(
-                self._session_store.load_or_create_session,
-                session_name,
+                self._session_store.load_session,
+                session_id,
             )
 
-    async def set_session_role(self, session_name: str, role_name: str) -> ChatSession:
+    async def set_session_role(self, session_id: str, role_name: str) -> Session:
         role_card = self._role_registry.require(role_name)
-        lock = await self._session_lock(session_name)
+        lock = await self._session_lock(session_id)
         async with lock:
             session = await asyncio.to_thread(
-                self._session_store.load_or_create_session,
-                session_name,
+                self._session_store.load_session,
+                session_id,
             )
             session.metadata = set_role_name(session.metadata, role_card.name)
             await asyncio.to_thread(self._session_store.save_session, session)
             return session
 
-    async def current_role_name(self, session_name: str) -> str:
-        lock = await self._session_lock(session_name)
+    async def current_role_name(self, session_id: str) -> str:
+        lock = await self._session_lock(session_id)
         async with lock:
             session = await asyncio.to_thread(
-                self._session_store.load_or_create_session,
-                session_name,
+                self._session_store.load_session,
+                session_id,
             )
             role_name = role_name_from_metadata(session.metadata)
             try:
@@ -288,25 +319,25 @@ class ConversationCoordinator:
 
     async def set_session_route_mode(
         self,
-        session_name: str,
+        session_id: str,
         route_mode: RouteMode,
-    ) -> ChatSession:
-        lock = await self._session_lock(session_name)
+    ) -> Session:
+        lock = await self._session_lock(session_id)
         async with lock:
             session = await asyncio.to_thread(
-                self._session_store.load_or_create_session,
-                session_name,
+                self._session_store.load_session,
+                session_id,
             )
             session.metadata = set_route_mode(session.metadata, route_mode)
             await asyncio.to_thread(self._session_store.save_session, session)
             return session
 
-    async def current_route_mode(self, session_name: str) -> RouteMode:
-        lock = await self._session_lock(session_name)
+    async def current_route_mode(self, session_id: str) -> RouteMode:
+        lock = await self._session_lock(session_id)
         async with lock:
             session = await asyncio.to_thread(
-                self._session_store.load_or_create_session,
-                session_name,
+                self._session_store.load_session,
+                session_id,
             )
             route_mode = route_mode_from_metadata(session.metadata)
             session.metadata = set_route_mode(session.metadata, route_mode)
@@ -316,102 +347,96 @@ class ConversationCoordinator:
     def available_roles(self) -> list[str]:
         return self._role_registry.names()
 
-    async def get_job(self, job_id: str) -> ConversationJob | None:
-        return await self._jobs.get(job_id)
+    async def get_run(self, run_id: str) -> AgentRun | None:
+        return await self._runs.get(run_id)
 
-    async def list_jobs(
+    async def list_runs(
         self,
         *,
-        session_name: str | None = None,
+        session_id: str | None = None,
         status: str | None = None,
         limit: int = 50,
-    ) -> list[ConversationJob]:
-        return await self._jobs.list_jobs(
-            session_name=session_name,
+    ) -> list[AgentRun]:
+        return await self._runs.list_runs(
+            session_id=session_id,
             status=status,
             limit=limit,
         )
 
-    async def retry_job(
+    async def retry_run(
         self,
-        job_id: str,
+        run_id: str,
         *,
         completion_callback: CompletionCallback | None = None,
     ) -> OrchestratedTurnResult:
-        job = await self._jobs.get(job_id)
-        if job is None:
-            raise ValueError(f"任务不存在：{job_id}")
-        if not job_can_retry(job):
+        run = await self._runs.get(run_id)
+        if run is None:
+            raise ValueError(f"任务不存在：{run_id}")
+        if not run_can_retry(run):
             raise ValueError("只有失败或已取消的任务可以重试")
 
         route_mode = (
-            job.route_mode
-            if job.route_mode in {"auto", "chat_only", "force_agent"}
+            run.route_mode
+            if run.route_mode in {"auto", "chat_only", "force_agent"}
             else None
         )
         return await self.handle_user_turn(
-            job.session_name,
-            job.prompt,
-            image_urls=job.image_urls,
-            file_attachments=job.file_attachments,
-            role_name=job.role_name,
+            run.session_id,
+            run.prompt,
+            image_urls=run.image_urls,
+            file_attachments=run.file_attachments,
+            role_name=run.role_name,
             route_mode=route_mode,
             completion_callback=completion_callback,
-            retry_of_job_id=job.job_id,
-            attempt=job.attempt + 1,
+            retry_of_run_id=run.run_id,
+            attempt=run.attempt + 1,
         )
 
-    async def get_job_trace(
+    async def get_run_events(
         self,
-        job_id: str,
-    ) -> tuple[ConversationJob | None, list[dict[str, Any]]]:
-        job = await self._jobs.get(job_id)
-        if job is None:
+        run_id: str,
+    ) -> tuple[AgentRun | None, list[dict[str, Any]]]:
+        run = await self._runs.get(run_id)
+        if run is None:
             return None, []
-        if not job.trace_run_id:
-            return job, []
-        events = await self._agent_runner.load_trace_events(
-            job.session_name,
-            job.trace_run_id,
-        )
-        return job, events
+        return run, await self._runs.read_events(run_id)
 
-    async def cancel_job(self, job_id: str) -> ConversationJob | None:
-        job = await self._jobs.get(job_id)
-        if job is None:
+    async def cancel_run(self, run_id: str) -> AgentRun | None:
+        run = await self._runs.get(run_id)
+        if run is None:
             return None
-        if job.status != "running":
-            return job
+        if run.status != "running":
+            return run
 
-        task = self._job_tasks.get(job_id)
+        task = self._run_tasks.get(run_id)
         if task is not None and not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
 
-        job = await self._jobs.get(job_id)
-        if job is None:
+        run = await self._runs.get(run_id)
+        if run is None:
             return None
-        if job.status != "running":
-            return job
+        if run.status != "running":
+            return run
 
-        final_text = await self._append_cancelled_message(job.session_name)
-        return await self._jobs.set_cancelled(
-            job_id,
+        final_text = await self._append_cancelled_message(run.session_id)
+        return await self._runs.set_cancelled(
+            run_id,
             final_response=final_text,
             final_response_content=final_text,
         )
 
-    async def cancel_jobs_for_session(self, session_name: str) -> list[ConversationJob]:
-        running_jobs = await self._jobs.list_for_session(
-            session_name,
+    async def cancel_runs_for_session(self, session_id: str) -> list[AgentRun]:
+        running_runs = await self._runs.list_for_session(
+            session_id,
             status="running",
         )
-        if not running_jobs:
+        if not running_runs:
             return []
 
         tasks: list[asyncio.Task[None]] = []
-        for job in running_jobs:
-            task = self._job_tasks.get(job.job_id)
+        for run in running_runs:
+            task = self._run_tasks.get(run.run_id)
             if task is None or task.done():
                 continue
             task.cancel()
@@ -419,62 +444,64 @@ class ConversationCoordinator:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        cancelled_jobs: list[ConversationJob] = []
-        for job in running_jobs:
-            current_job = await self._jobs.get(job.job_id)
-            if current_job is None or current_job.status != "running":
-                if current_job is not None:
-                    cancelled_jobs.append(current_job)
+        cancelled_runs: list[AgentRun] = []
+        for run in running_runs:
+            current_run = await self._runs.get(run.run_id)
+            if current_run is None or current_run.status != "running":
+                if current_run is not None:
+                    cancelled_runs.append(current_run)
                 continue
-            updated_job = await self._jobs.set_cancelled(
-                job.job_id,
+            updated_run = await self._runs.set_cancelled(
+                run.run_id,
                 final_response="",
                 final_response_content="",
             )
-            if updated_job is not None:
-                cancelled_jobs.append(updated_job)
-        return cancelled_jobs
+            if updated_run is not None:
+                cancelled_runs.append(updated_run)
+        return cancelled_runs
 
-    async def mark_session_deleted(self, session_name: str) -> None:
+    async def delete_runs_for_session(self, session_id: str) -> None:
+        await self._runs.delete_for_session(session_id)
+
+    async def mark_session_deleted(self, session_id: str) -> None:
         async with self._deleted_sessions_guard:
-            self._deleted_sessions.add(session_name)
+            self._deleted_sessions.add(session_id)
         mark_deleted = getattr(self._agent_runner, "mark_session_deleted", None)
         if mark_deleted is not None:
-            await mark_deleted(session_name)
+            await mark_deleted(session_id)
 
-    async def restore_session(self, session_name: str) -> None:
+    async def restore_session(self, session_id: str) -> None:
         async with self._deleted_sessions_guard:
-            self._deleted_sessions.discard(session_name)
+            self._deleted_sessions.discard(session_id)
         restore = getattr(self._agent_runner, "restore_session", None)
         if restore is not None:
-            await restore(session_name)
+            await restore(session_id)
 
-    async def job_counts(self) -> dict[str, int]:
-        return await self._jobs.counts()
+    async def run_counts(self) -> dict[str, int]:
+        return await self._runs.counts()
 
     async def close(self) -> None:
-        job_ids = list(self._job_tasks)
+        run_ids = list(self._run_tasks)
         tasks = list(self._background_tasks)
         for task in tasks:
             task.cancel()
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-        for job_id in job_ids:
-            await self._mark_job_cancelled(job_id)
+        for run_id in run_ids:
+            await self._mark_run_cancelled(run_id)
         self._background_tasks.clear()
-        self._job_tasks.clear()
+        self._run_tasks.clear()
 
-    async def _run_agent_job(
+    async def _run_agent_run(
         self,
-        job_id: str,
+        run_id: str,
         *,
-        session_name: str,
+        session_id: str,
         prompt: str,
         image_urls: list[ImageInput] | None,
         file_attachments: list[FileInput] | None,
         handoff_text: str | None,
         continuation_text: str | None,
-        trace_run_id: str | None,
         completion_callback: CompletionCallback | None,
     ) -> None:
         visible_role_name = ""
@@ -491,11 +518,11 @@ class ConversationCoordinator:
                 ),
                 "image_urls": image_urls,
                 "file_attachments": file_attachments,
-                "trace_run_id": trace_run_id,
+                "run_id": run_id,
             }
 
             execution = await self._agent_runner.run_prompt(
-                session_name,
+                session_id,
                 prompt,
                 **run_prompt_kwargs,
             )
@@ -510,7 +537,7 @@ class ConversationCoordinator:
                 execution.agent_result.new_messages,
             )
             final_text, final_content, visible_role_name = await self._finalize_visible_result(
-                session_name,
+                session_id,
                 prompt=prompt,
                 image_urls=image_urls,
                 file_attachments=file_attachments,
@@ -527,16 +554,16 @@ class ConversationCoordinator:
                 pending_user_input=execution.agent_result.pending_user_input,
             )
             if awaiting_user_input:
-                job = await self._jobs.set_waiting_for_input(
-                    job_id,
+                run = await self._runs.set_waiting_for_input(
+                    run_id,
                     final_response=final_text,
                     final_response_content=final_content,
                     steps=execution.agent_result.steps,
                     pending_user_input=execution.agent_result.pending_user_input,
                 )
             else:
-                job = await self._jobs.set_completed(
-                    job_id,
+                run = await self._runs.set_completed(
+                    run_id,
                     final_response=final_text,
                     final_response_content=final_content,
                     steps=execution.agent_result.steps,
@@ -546,56 +573,55 @@ class ConversationCoordinator:
         except Exception as exc:
             error_text = str(exc)
             final_text, final_content, visible_role_name = await self._finalize_visible_result(
-                session_name,
+                session_id,
                 prompt=prompt,
                 image_urls=image_urls,
                 file_attachments=file_attachments,
                 raw_content=error_text,
                 is_error=True,
             )
-            job = await self._jobs.set_failed(
-                job_id,
+            run = await self._runs.set_failed(
+                run_id,
                 final_response=final_text,
                 final_response_content=final_content,
                 error=error_text,
             )
 
-        if job is None:
+        if run is None:
             return
-        if not job.final_response.strip():
+        if not run.final_response.strip():
             return
         if completion_callback is None:
             return
 
         await completion_callback(
-            ConversationJob(
-                job_id=job.job_id,
-                session_name=job.session_name,
-                prompt=job.prompt,
-                immediate_response=job.immediate_response,
-                role_name=visible_role_name or job.role_name,
-                status=job.status,
-                created_at=job.created_at,
-                updated_at=job.updated_at,
-                started_at=job.started_at,
-                finished_at=job.finished_at,
-                trace_run_id=job.trace_run_id,
-                route_mode=job.route_mode,
-                attempt=job.attempt,
-                retry_of_job_id=job.retry_of_job_id,
-                image_urls=job.image_urls,
-                file_attachments=job.file_attachments,
-                final_response=job.final_response,
-                final_response_content=job.final_response_content,
-                error=job.error,
-                steps=job.steps,
-                pending_user_input=job.pending_user_input,
+            AgentRun(
+                run_id=run.run_id,
+                session_id=run.session_id,
+                prompt=run.prompt,
+                immediate_response=run.immediate_response,
+                role_name=visible_role_name or run.role_name,
+                status=run.status,
+                created_at=run.created_at,
+                updated_at=run.updated_at,
+                started_at=run.started_at,
+                finished_at=run.finished_at,
+                route_mode=run.route_mode,
+                attempt=run.attempt,
+                retry_of_run_id=run.retry_of_run_id,
+                image_urls=run.image_urls,
+                file_attachments=run.file_attachments,
+                final_response=run.final_response,
+                final_response_content=run.final_response_content,
+                error=run.error,
+                steps=run.steps,
+                pending_user_input=run.pending_user_input,
             )
         )
 
     async def _finalize_visible_result(
         self,
-        session_name: str,
+        session_id: str,
         *,
         prompt: str,
         image_urls: list[ImageInput] | None = None,
@@ -608,14 +634,14 @@ class ConversationCoordinator:
         direct_response_content: MessageContent = "",
         pending_user_input: dict[str, Any] | None = None,
     ) -> tuple[str, MessageContent, str]:
-        lock = await self._session_lock(session_name)
+        lock = await self._session_lock(session_id)
         async with lock:
-            deleted = await self._is_session_deleted(session_name)
+            deleted = await self._is_session_deleted(session_id)
             if deleted:
                 return "", "", ""
             session = await asyncio.to_thread(
-                self._session_store.load_or_create_session,
-                session_name,
+                self._session_store.load_session,
+                session_id,
             )
             role_card = self._resolve_session_role(session)
             metadata_changed = False
@@ -700,21 +726,21 @@ class ConversationCoordinator:
 
     async def present_scheduled_notification(
         self,
-        session_name: str,
+        session_id: str,
         raw_content: str,
     ) -> str:
         content = raw_content.strip()
         if not content:
             return ""
 
-        lock = await self._session_lock(session_name)
+        lock = await self._session_lock(session_id)
         async with lock:
-            deleted = await self._is_session_deleted(session_name)
+            deleted = await self._is_session_deleted(session_id)
             if deleted:
                 return ""
             session = await asyncio.to_thread(
-                self._session_store.load_or_create_session,
-                session_name,
+                self._session_store.load_session,
+                session_id,
             )
             role_card = self._resolve_session_role(session)
             final_text = await self._roleplay_engine.present_scheduled_notification(
@@ -727,16 +753,16 @@ class ConversationCoordinator:
                 await asyncio.to_thread(self._session_store.save_session, session)
             return final_text
 
-    async def _append_cancelled_message(self, session_name: str) -> str:
-        final_text = JOB_CANCELLED_TEXT
-        lock = await self._session_lock(session_name)
+    async def _append_cancelled_message(self, session_id: str) -> str:
+        final_text = RUN_CANCELLED_TEXT
+        lock = await self._session_lock(session_id)
         async with lock:
-            deleted = await self._is_session_deleted(session_name)
+            deleted = await self._is_session_deleted(session_id)
             if deleted:
                 return ""
             session = await asyncio.to_thread(
-                self._session_store.load_or_create_session,
-                session_name,
+                self._session_store.load_session,
+                session_id,
             )
             session.history.append(LLMMessage(role="assistant", content=final_text))
             await asyncio.to_thread(self._session_store.save_session, session)
@@ -744,7 +770,7 @@ class ConversationCoordinator:
 
     def _resolve_turn_role(
         self,
-        session: ChatSession,
+        session: Session,
         role_name: str | None,
     ) -> RoleCard:
         if role_name is not None:
@@ -753,7 +779,7 @@ class ConversationCoordinator:
             return role_card
         return self._resolve_session_role(session)
 
-    def _resolve_session_role(self, session: ChatSession) -> RoleCard:
+    def _resolve_session_role(self, session: Session) -> RoleCard:
         role_name = role_name_from_metadata(session.metadata)
         try:
             role_card = self._role_registry.require(role_name)
@@ -764,57 +790,57 @@ class ConversationCoordinator:
 
     def _resolve_turn_route_mode(
         self,
-        session: ChatSession,
+        session: Session,
         route_mode: RouteMode | None,
     ) -> RouteMode:
         if route_mode is not None:
             return route_mode
         return route_mode_from_metadata(session.metadata)
 
-    async def _mark_job_cancelled(self, job_id: str) -> None:
-        job = await self._jobs.get(job_id)
-        if job is None or job.status != "running":
+    async def _mark_run_cancelled(self, run_id: str) -> None:
+        run = await self._runs.get(run_id)
+        if run is None or run.status != "running":
             return
-        await self._jobs.set_cancelled(
-            job_id,
-            final_response=JOB_CANCELLED_TEXT,
-            final_response_content=JOB_CANCELLED_TEXT,
+        await self._runs.set_cancelled(
+            run_id,
+            final_response=RUN_CANCELLED_TEXT,
+            final_response_content=RUN_CANCELLED_TEXT,
         )
 
-    async def _session_lock(self, session_name: str) -> asyncio.Lock:
+    async def _session_lock(self, session_id: str) -> asyncio.Lock:
         async with self._session_locks_guard:
-            lock = self._session_locks.get(session_name)
+            lock = self._session_locks.get(session_id)
             if lock is None:
                 lock = asyncio.Lock()
-                self._session_locks[session_name] = lock
+                self._session_locks[session_id] = lock
             return lock
 
-    async def _is_session_deleted(self, session_name: str) -> bool:
+    async def _is_session_deleted(self, session_id: str) -> bool:
         async with self._deleted_sessions_guard:
-            return session_name in self._deleted_sessions
+            return session_id in self._deleted_sessions
 
-    def _start_background_job(
+    def _start_background_run(
         self,
-        job_id: str,
-        coroutine_factory: BackgroundJobFactory,
+        run_id: str,
+        coroutine_factory: BackgroundTaskFactory,
     ) -> None:
         task = asyncio.create_task(
             self._run_after_yield(coroutine_factory),
-            name=f"echobot_conversation_job_{job_id}",
+            name=f"echobot_agent_run_{run_id}",
         )
         self._background_tasks.add(task)
-        self._job_tasks[job_id] = task
+        self._run_tasks[run_id] = task
 
         def cleanup(done_task: asyncio.Task[None]) -> None:
             self._background_tasks.discard(done_task)
-            if self._job_tasks.get(job_id) is done_task:
-                self._job_tasks.pop(job_id, None)
+            if self._run_tasks.get(run_id) is done_task:
+                self._run_tasks.pop(run_id, None)
 
         task.add_done_callback(cleanup)
 
     async def _run_after_yield(
         self,
-        coroutine_factory: BackgroundJobFactory,
+        coroutine_factory: BackgroundTaskFactory,
     ) -> None:
         await asyncio.sleep(0)
         await coroutine_factory()
@@ -924,7 +950,7 @@ def _forced_agent_decision_for_pending_input():
 
 def _build_agent_handoff_text(
     *,
-    session: ChatSession,
+    session: Session,
 ) -> str | None:
     entries = _collect_handoff_entries(session.history)
     if not entries:
@@ -936,7 +962,7 @@ def _build_agent_handoff_text(
         "The current user request follows immediately after this handoff.",
         "Use the visible context below to resolve references such as 'that script', 'the previous result', or 'the list above'.",
         "Treat these messages as user-visible conversation context. If they mention files, memory, schedules, or tool results, verify them with tools before relying on them.",
-        f"Session name: {session.name}",
+        f"Session ID: {session.id}",
         "",
         "Recent visible messages:",
     ]

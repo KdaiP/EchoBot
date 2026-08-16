@@ -19,7 +19,7 @@ from ..turn_inputs import (
     resolve_file_attachment_route_mode,
 )
 from .delivery import DeliveryStore
-from .route_sessions import RouteSessionStore
+from .route_bindings import RouteBindingStore
 from .session_service import GatewaySessionService
 
 
@@ -33,7 +33,7 @@ class GatewayRuntime:
         bus: MessageBus,
         session_service: GatewaySessionService | None = None,
         delivery_store: DeliveryStore | None = None,
-        route_session_store: RouteSessionStore | None = None,
+        route_binding_store: RouteBindingStore | None = None,
         *,
         max_inflight_messages: int = 32,
     ) -> None:
@@ -43,17 +43,16 @@ class GatewayRuntime:
             delivery_store = delivery_store or DeliveryStore(
                 context.workspace / ".echobot" / "delivery.json",
             )
-            route_session_store = route_session_store or RouteSessionStore(
-                context.workspace / ".echobot" / "route_sessions.json",
+            route_binding_store = route_binding_store or RouteBindingStore(
+                context.workspace / ".echobot" / "route_bindings.jsonl",
             )
             core_session_service = SessionLifecycleService(
                 context.session_store,
-                context.agent_session_store,
                 coordinator=context.coordinator,
             )
             session_service = GatewaySessionService(
                 core_session_service,
-                route_session_store=route_session_store,
+                route_binding_store=route_binding_store,
                 delivery_store=delivery_store,
             )
         self._session_service = session_service
@@ -101,8 +100,7 @@ class GatewayRuntime:
         command_result = await dispatch_gateway_command(
             GatewayCommandContext(
                 coordinator=self._context.coordinator,
-                runtime_controls=self._context.runtime_controls,
-                workspace=self._context.workspace,
+                settings_service=self._context.settings_service,
                 session_service=self._session_service,
                 route_key=route_key,
                 address=message.address,
@@ -120,11 +118,11 @@ class GatewayRuntime:
             )
             return
 
-        route_session = await self._session_service.current_route_session(
+        route_session = await self._session_service.current_routed_session(
             route_key,
         )
         await self._session_service.remember_delivery_target(
-            route_session.session_name,
+            route_session.session_id,
             message.address,
             message.metadata,
         )
@@ -140,22 +138,22 @@ class GatewayRuntime:
                 self._context.workspace,
             )
             execution = await self._context.coordinator.handle_user_turn(
-                route_session.session_name,
+                route_session.session_id,
                 message.text,
                 image_urls=image_urls,
                 file_attachments=file_attachments,
                 route_mode=await self._resolve_effective_route_mode(
-                    route_session.session_name,
+                    route_session.session_id,
                     has_file_attachments=bool(file_attachments),
                 ),
                 completion_callback=self._completion_callback_for_session(
-                    route_session.session_name,
+                    route_session.session_id,
                 ),
             )
             content: MessageContent = execution.response_content
-            await self._session_service.touch_route_session(
+            await self._session_service.touch_routed_session(
                 route_key,
-                route_session.session_name,
+                route_session.session_id,
                 updated_at=execution.session.updated_at,
             )
             if is_message_content_empty(content) and execution.delegated and not execution.completed:
@@ -176,16 +174,16 @@ class GatewayRuntime:
 
     def _completion_callback_for_session(
         self,
-        session_name: str,
+        session_id: str,
     ):
-        async def notify(job) -> None:
+        async def notify(run) -> None:
             await self._publish_session_response(
-                session_name,
-                job.final_response_content,
+                session_id,
+                run.final_response_content,
                 metadata={
                     "async_result": True,
-                    "job_id": job.job_id,
-                    "job_status": job.status,
+                    "run_id": run.run_id,
+                    "run_status": run.status,
                 },
             )
 
@@ -203,13 +201,13 @@ class GatewayRuntime:
 
     async def _notify_session(
         self,
-        session_name: str,
+        session_id: str,
         content: MessageContent,
         *,
         kind: str,
         title: str,
     ) -> None:
-        target = await self._session_service.get_session_target(session_name)
+        target = await self._session_service.get_session_target(session_id)
         await self._publish_notification(
             target,
             content,
@@ -219,12 +217,12 @@ class GatewayRuntime:
 
     async def _publish_session_response(
         self,
-        session_name: str,
+        session_id: str,
         content: MessageContent,
         *,
         metadata: dict[str, object] | None = None,
     ) -> None:
-        target = await self._session_service.get_session_target(session_name)
+        target = await self._session_service.get_session_target(session_id)
         if target is None:
             logger.info("[reply] %s", message_content_to_text(content))
             return
@@ -276,13 +274,13 @@ class GatewayRuntime:
 
     async def _notify_schedule(
         self,
-        session_name: str,
+        session_id: str,
         kind: str,
         title: str,
         content: MessageContent,
     ) -> None:
         await self._notify_session(
-            session_name,
+            session_id,
             content,
             kind=kind,
             title=title,
@@ -290,7 +288,7 @@ class GatewayRuntime:
 
     async def _resolve_effective_route_mode(
         self,
-        session_name: str,
+        session_id: str,
         *,
         has_file_attachments: bool,
     ):
@@ -300,11 +298,11 @@ class GatewayRuntime:
             can_process_files = has_file_processing_capability(
                 self._context.skill_registry,
                 getattr(self._context, "tool_registry_factory", None),
-                session_name,
+                session_id,
             )
         if can_process_files:
             current_route_mode = await self._context.coordinator.current_route_mode(
-                session_name,
+                session_id,
             )
 
         return resolve_file_attachment_route_mode(

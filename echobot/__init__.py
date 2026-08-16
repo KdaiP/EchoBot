@@ -1,14 +1,13 @@
 from .attachments import AttachmentStore
-from .agent import AgentCore, AgentRunResult
+from .agent import AgentCore, AgentRequest, AgentRunResult, AgentRunStatus
 from .config import load_env_file
 from .models import LLMMessage, LLMResponse, LLMTool, LLMUsage, ToolCall
 from .memory import MemoryPreparationResult, ReMeLightSettings, ReMeLightSupport
 from .providers.base import LLMProvider
 from .providers.openai_compatible import OpenAICompatibleProvider, OpenAICompatibleSettings
-from .runtime.agent_traces import AgentTraceStore
 from .runtime.session_runner import SessionAgentRunner
-from .runtime.session_service import SessionLifecycleService, SessionService
-from .runtime.sessions import ChatSession, SessionInfo, SessionStore
+from .runtime.session_service import SessionLifecycleService
+from .runtime.sessions import Session, SessionInfo, SessionStore
 from .runtime.system_prompt import build_default_system_prompt
 from .scheduling.cron import CronJob, CronPayload, CronSchedule, CronService
 from .scheduling.heartbeat import HeartbeatService
@@ -49,9 +48,10 @@ from .tools import (
 
 __all__ = [
     "ActivateSkillTool",
-    "AgentTraceStore",
     "AgentCore",
     "AgentRunResult",
+    "AgentRequest",
+    "AgentRunStatus",
     "AttachmentStore",
     "BaseTool",
     "CommandExecutionTool",
@@ -61,7 +61,7 @@ __all__ = [
     "CronService",
     "CronTool",
     "CurrentTimeTool",
-    "ChatSession",
+    "Session",
     "EditTextFileTool",
     "GitDiffTool",
     "GitStatusTool",
@@ -91,7 +91,6 @@ __all__ = [
     "Skill",
     "SkillRegistry",
     "SessionInfo",
-    "SessionService",
     "SessionStore",
     "ToolExecutionOutput",
     "ToolLoopControl",

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..runtime.session_service import SessionService
-from ..runtime.sessions import ChatSession, SessionInfo
+from ..runtime.session_service import SessionLifecycleService
+from ..runtime.sessions import Session, SessionInfo
 from .parsing import split_action_argument, split_command_parts
 
 
@@ -18,7 +18,7 @@ class SavedSessionCommand:
 
 @dataclass(slots=True)
 class SavedSessionCommandResult:
-    session: ChatSession
+    session: Session
     lines: list[str]
 
 
@@ -43,8 +43,8 @@ def is_saved_session_command(text: str) -> bool:
 
 async def execute_saved_session_command(
     *,
-    session_service: SessionService,
-    current_session: ChatSession,
+    session_service: SessionLifecycleService,
+    current_session: Session,
     command: SavedSessionCommand,
 ) -> SavedSessionCommandResult:
     if command.action == "help":
@@ -59,7 +59,7 @@ async def execute_saved_session_command(
             session=current_session,
             lines=format_saved_session_list_lines(
                 sessions,
-                current_session_name=current_session.name,
+                current_session_id=current_session.id,
             ),
         )
 
@@ -68,7 +68,7 @@ async def execute_saved_session_command(
             session=current_session,
             lines=[
                 (
-                    f"Current session: {current_session.name} "
+                    f"Current session: {current_session.title} [{current_session.id[:8]}] "
                     f"({len(current_session.history)} messages)"
                 )
             ],
@@ -78,19 +78,19 @@ async def execute_saved_session_command(
         next_session = await session_service.create_session(command.argument or None)
         return SavedSessionCommandResult(
             session=next_session,
-            lines=[f"Switched to new session: {next_session.name}"],
+            lines=[f"Switched to new session: {next_session.title} [{next_session.id[:8]}]"],
         )
 
     if command.action == "switch":
         if not command.argument:
-            raise ValueError("Usage: /session switch <name>")
+            raise ValueError("Usage: /session switch <session-id>")
 
         next_session = await session_service.switch_session(command.argument)
         return SavedSessionCommandResult(
             session=next_session,
             lines=[
                 (
-                    f"Switched to session: {next_session.name} "
+                    f"Switched to session: {next_session.title} [{next_session.id[:8]}] "
                     f"({len(next_session.history)} messages)"
                 )
             ],
@@ -98,22 +98,22 @@ async def execute_saved_session_command(
 
     if command.action == "rename":
         if not command.argument:
-            raise ValueError("Usage: /session rename <name>")
+            raise ValueError("Usage: /session rename <title>")
 
         renamed_session = await session_service.rename_session(
-            current_session.name,
+            current_session.id,
             command.argument,
         )
         return SavedSessionCommandResult(
             session=renamed_session,
-            lines=[f"Renamed current session to: {renamed_session.name}"],
+            lines=[f"Renamed current session to: {renamed_session.title}"],
         )
 
     if command.action == "delete":
         sessions = await session_service.list_sessions()
-        deleted = await session_service.delete_session(current_session.name)
+        deleted = await session_service.delete_session(current_session.id)
         if not deleted:
-            raise ValueError(f"Session not found: {current_session.name}")
+            raise ValueError(f"Session not found: {current_session.id}")
 
         next_session = await session_service.load_current_session()
         if len(sessions) <= 1:
@@ -121,12 +121,12 @@ async def execute_saved_session_command(
                 session=next_session,
                 lines=[
                     "Deleted the last session and created a fresh one: "
-                    f"{next_session.name}"
+                    f"{next_session.title}"
                 ],
             )
         return SavedSessionCommandResult(
             session=next_session,
-            lines=[f"Deleted current session. Now using: {next_session.name}"],
+            lines=[f"Deleted current session. Now using: {next_session.title}"],
         )
 
     return SavedSessionCommandResult(
@@ -141,9 +141,9 @@ def format_saved_session_help_lines() -> list[str]:
         "- /session help",
         "- /session list",
         "- /session current",
-        "- /session new [name]",
-        "- /session switch <name>",
-        "- /session rename <name>",
+        "- /session new [title]",
+        "- /session switch <session-id>",
+        "- /session rename <title>",
         "- /session delete",
         "- /route help",
     ]
@@ -152,16 +152,16 @@ def format_saved_session_help_lines() -> list[str]:
 def format_saved_session_list_lines(
     sessions: list[SessionInfo],
     *,
-    current_session_name: str,
+    current_session_id: str,
 ) -> list[str]:
     if not sessions:
         return ["No saved sessions."]
 
     lines = ["Saved sessions:"]
     for session in sessions:
-        marker = "*" if session.name == current_session_name else " "
+        marker = "*" if session.id == current_session_id else " "
         lines.append(
-            f"{marker} {session.name} | "
+            f"{marker} {session.title} [{session.id}] | "
             f"{session.message_count} messages | "
             f"{session.updated_at}"
         )

@@ -11,6 +11,7 @@ from .shell import _decode_command_output
 
 class GitStatusTool(WorkspaceTool):
     name = "git_status"
+    execution_mode = "parallel"
     description = "Show the current git status for the workspace."
     parameters = {
         "type": "object",
@@ -40,6 +41,7 @@ class GitStatusTool(WorkspaceTool):
 
 class GitDiffTool(WorkspaceTool):
     name = "git_diff"
+    execution_mode = "parallel"
     description = "Show a git diff for the workspace or one file."
     parameters = {
         "type": "object",
@@ -123,7 +125,12 @@ async def _run_git_command(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout_bytes, stderr_bytes = await process.communicate()
+    try:
+        stdout_bytes, stderr_bytes = await process.communicate()
+    except asyncio.CancelledError:
+        process.kill()
+        await process.communicate()
+        raise
     stdout = _decode_command_output(stdout_bytes)
     stderr = _decode_command_output(stderr_bytes)
 

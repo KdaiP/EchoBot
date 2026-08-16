@@ -162,7 +162,7 @@ export function createCronController(deps) {
         meta.appendChild(buildCronBadge(job.enabled ? "已启用" : "已停用", job.enabled ? "enabled" : "disabled"));
         meta.appendChild(buildCronBadge(buildCronLastStatusLabel(job.last_status), cronStatusClassName(job.last_status)));
         meta.appendChild(buildCronMetaText(`计划: ${job.schedule || "-"}`));
-        meta.appendChild(buildCronMetaText(`会话: ${job.session_name || "-"}`));
+        meta.appendChild(buildCronMetaText(`会话 ID: ${job.session_id || "-"}`));
         meta.appendChild(buildCronMetaText(`类型: ${job.payload_kind || "-"}`));
 
         const times = document.createElement("div");

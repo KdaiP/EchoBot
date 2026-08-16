@@ -1,156 +1,190 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 
 from ..channels.types import ChannelAddress, DeliveryTarget
 from ..runtime.session_service import SessionLifecycleService
-from ..runtime.sessions import normalize_session_name
+from ..runtime.sessions import Session
 from .delivery import DeliveryStore
-from .route_sessions import (
-    DeleteRouteSessionResult,
-    RouteSessionStore,
-    RouteSessionSummary,
-)
+from .route_bindings import RouteBindingStore
+
+
+@dataclass(slots=True, frozen=True)
+class RoutedSession:
+    session_id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+    @property
+    def short_id(self) -> str:
+        return self.session_id[:8]
+
+
+@dataclass(slots=True, frozen=True)
+class DeleteRoutedSessionResult:
+    deleted: RoutedSession
+    current: RoutedSession
+    created_replacement: bool = False
 
 
 class GatewaySessionService:
+    """Compose core session lifecycle with channel route bindings."""
+
     def __init__(
         self,
         session_service: SessionLifecycleService,
         *,
-        route_session_store: RouteSessionStore,
+        route_binding_store: RouteBindingStore,
         delivery_store: DeliveryStore | None = None,
     ) -> None:
         self._session_service = session_service
-        self._route_session_store = route_session_store
+        self._route_bindings = route_binding_store
         self._delivery_store = delivery_store
 
     async def list_sessions(self):
         return await self._session_service.list_sessions()
 
-    async def load_session(self, name: str):
-        return await self._session_service.load_session(name)
-
-    async def load_or_create_session(self, name: str):
-        return await self._session_service.load_or_create_session(name)
+    async def load_session(self, session_id: str):
+        return await self._session_service.load_session(session_id)
 
     async def load_current_session(self):
         return await self._session_service.load_current_session()
 
-    async def create_session(self, name: str | None = None):
-        return await self._session_service.create_session(name)
+    async def create_session(self, title: str | None = None):
+        return await self._session_service.create_session(title)
 
-    async def set_current_session(self, name: str) -> None:
-        await self._session_service.set_current_session(name)
+    async def set_current_session(self, session_id: str) -> None:
+        await self._session_service.set_current_session(session_id)
 
-    async def switch_session(self, name: str):
-        return await self._session_service.switch_session(name)
+    async def switch_session(self, session_id: str):
+        return await self._session_service.switch_session(session_id)
 
-    async def rename_session(self, old_name: str, new_name: str):
-        session = await self._session_service.rename_session(old_name, new_name)
-        normalized_old_name = normalize_session_name(old_name)
-        await asyncio.to_thread(
-            self._route_session_store.replace_session_name,
-            normalized_old_name,
-            session.name,
-        )
-        if self._delivery_store is not None:
-            await asyncio.to_thread(
-                self._delivery_store.replace_session_name,
-                normalized_old_name,
-                session.name,
-            )
-        return session
+    async def rename_session(self, session_id: str, title: str):
+        return await self._session_service.rename_session(session_id, title)
 
-    async def delete_session(self, name: str) -> bool:
-        deleted = await self._session_service.delete_session(name)
+    async def delete_session(self, session_id: str) -> bool:
+        deleted = await self._session_service.delete_session(session_id)
         if not deleted:
             return False
-        normalized_name = normalize_session_name(name)
-        await asyncio.to_thread(self._route_session_store.remove_session, normalized_name)
+        await asyncio.to_thread(self._route_bindings.remove_session, session_id)
         if self._delivery_store is not None:
-            await asyncio.to_thread(self._delivery_store.forget, normalized_name)
+            await asyncio.to_thread(self._delivery_store.forget, session_id)
         return True
 
-    async def current_route_session(self, route_key: str) -> RouteSessionSummary:
-        return await asyncio.to_thread(
-            self._route_session_store.get_current_session,
+    async def current_routed_session(self, route_key: str) -> RoutedSession:
+        session_id = await asyncio.to_thread(
+            self._route_bindings.current_session_id,
             route_key,
         )
+        if session_id is None:
+            return await self.create_routed_session(route_key)
+        try:
+            return _routed_session(await self._session_service.load_session(session_id))
+        except ValueError:
+            await asyncio.to_thread(self._route_bindings.remove_session, session_id)
+            return await self.create_routed_session(route_key)
 
-    async def list_route_sessions(self, route_key: str) -> list[RouteSessionSummary]:
-        return await asyncio.to_thread(
-            self._route_session_store.list_sessions,
+    async def list_routed_sessions(self, route_key: str) -> list[RoutedSession]:
+        session_ids = await asyncio.to_thread(
+            self._route_bindings.list_session_ids,
             route_key,
         )
+        if not session_ids:
+            return [await self.create_routed_session(route_key)]
+        sessions: list[RoutedSession] = []
+        for session_id in session_ids:
+            try:
+                session = await self._session_service.load_session(session_id)
+            except ValueError:
+                await asyncio.to_thread(self._route_bindings.remove_session, session_id)
+                continue
+            sessions.append(_routed_session(session))
+        if sessions:
+            return sessions
+        return [await self.create_routed_session(route_key)]
 
-    async def create_route_session(
+    async def create_routed_session(
         self,
         route_key: str,
         *,
         title: str | None = None,
-    ) -> RouteSessionSummary:
-        return await asyncio.to_thread(
-            self._route_session_store.create_session,
+    ) -> RoutedSession:
+        session = await self._session_service.create_session(title)
+        await asyncio.to_thread(
+            self._route_bindings.bind_session,
             route_key,
-            title=title,
+            session.id,
         )
+        return _routed_session(session)
 
-    async def switch_route_session(
+    async def switch_routed_session(
         self,
         route_key: str,
         index: int,
-    ) -> RouteSessionSummary:
-        return await asyncio.to_thread(
-            self._route_session_store.switch_session,
+    ) -> RoutedSession:
+        session_id = await asyncio.to_thread(
+            self._route_bindings.select_session,
             route_key,
             index,
         )
+        return _routed_session(await self._session_service.load_session(session_id))
 
-    async def rename_current_route_session(
+    async def rename_current_routed_session(
         self,
         route_key: str,
         title: str,
-    ) -> RouteSessionSummary:
-        return await asyncio.to_thread(
-            self._route_session_store.rename_current_session,
-            route_key,
-            title,
-        )
+    ) -> RoutedSession:
+        current = await self.current_routed_session(route_key)
+        session = await self._session_service.rename_session(current.session_id, title)
+        return _routed_session(session)
 
-    async def touch_route_session(
+    async def touch_routed_session(
         self,
         route_key: str,
-        session_name: str,
+        session_id: str,
         *,
         updated_at: str | None = None,
     ) -> None:
         await asyncio.to_thread(
-            self._route_session_store.touch_session,
+            self._route_bindings.touch_session,
             route_key,
-            session_name,
+            session_id,
             updated_at=updated_at,
         )
 
-    async def delete_current_route_session(
+    async def delete_current_routed_session(
         self,
         route_key: str,
-    ) -> DeleteRouteSessionResult:
-        result = await asyncio.to_thread(
-            self._route_session_store.delete_current_session,
-            route_key,
-        )
-        await self._session_service.purge_session(result.deleted.session_name)
+    ) -> DeleteRoutedSessionResult:
+        current = await self.current_routed_session(route_key)
+        removed = await asyncio.to_thread(self._route_bindings.remove_current, route_key)
+        if removed is None:
+            raise RuntimeError("Current route has no session binding")
+        await self._session_service.purge_session(removed.session_id)
         if self._delivery_store is not None:
-            await asyncio.to_thread(
-                self._delivery_store.forget,
-                result.deleted.session_name,
+            await asyncio.to_thread(self._delivery_store.forget, removed.session_id)
+
+        if removed.replacement_session_id is None:
+            replacement = await self.create_routed_session(route_key)
+            created_replacement = True
+        else:
+            replacement = _routed_session(
+                await self._session_service.load_session(
+                    removed.replacement_session_id
+                )
             )
-        return result
+            created_replacement = False
+        return DeleteRoutedSessionResult(
+            deleted=current,
+            current=replacement,
+            created_replacement=created_replacement,
+        )
 
     async def remember_delivery_target(
         self,
-        session_name: str,
+        session_id: str,
         address: ChannelAddress,
         metadata: dict[str, object] | None = None,
     ) -> None:
@@ -158,25 +192,34 @@ class GatewaySessionService:
             raise RuntimeError("Delivery store is not configured")
         await asyncio.to_thread(
             self._delivery_store.remember,
-            session_name,
+            session_id,
             address,
             metadata,
         )
 
-    async def forget_delivery_target(self, session_name: str) -> None:
+    async def forget_delivery_target(self, session_id: str) -> None:
         if self._delivery_store is None:
             raise RuntimeError("Delivery store is not configured")
-        await asyncio.to_thread(self._delivery_store.forget, session_name)
+        await asyncio.to_thread(self._delivery_store.forget, session_id)
 
-    async def get_session_target(self, session_name: str) -> DeliveryTarget | None:
+    async def get_session_target(self, session_id: str) -> DeliveryTarget | None:
         if self._delivery_store is None:
             return None
         return await asyncio.to_thread(
             self._delivery_store.get_session_target,
-            session_name,
+            session_id,
         )
 
     async def get_latest_target(self) -> DeliveryTarget | None:
         if self._delivery_store is None:
             return None
         return await asyncio.to_thread(self._delivery_store.get_latest_target)
+
+
+def _routed_session(session: Session) -> RoutedSession:
+    return RoutedSession(
+        session_id=session.id,
+        title=session.title,
+        created_at=session.created_at,
+        updated_at=session.updated_at,
+    )

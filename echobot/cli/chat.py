@@ -5,10 +5,9 @@ import asyncio
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 
-from ..agent import AgentCore, AgentRunResult
+from ..agent import AgentCore
 from ..commands.bindings import CliCommandContext, dispatch_cli_command
 from ..memory import ReMeLightSupport
-from ..models import LLMMessage
 from ..orchestration import ConversationCoordinator
 from ..runtime.bootstrap import RuntimeOptions, build_runtime_context
 from ..runtime.scheduled_tasks import (
@@ -16,9 +15,8 @@ from ..runtime.scheduled_tasks import (
     build_heartbeat_executor as build_shared_heartbeat_executor,
 )
 from ..runtime.session_runner import SessionAgentRunner
-from ..runtime.session_service import SessionService
-from ..runtime.sessions import ChatSession, SessionStore
-from ..runtime.turns import run_agent_turn
+from ..runtime.session_service import SessionLifecycleService
+from ..runtime.sessions import Session, SessionStore
 from ..skill_support import SkillRegistry
 from ..tools import ToolRegistry
 from .common import add_runtime_arguments, runtime_options_from_args
@@ -54,7 +52,7 @@ def print_help(
     *,
     tool_registry: ToolRegistry | None,
     skill_registry: SkillRegistry | None,
-    session: ChatSession,
+    session: Session,
     memory_support: ReMeLightSupport | None,
     cron_store_path: Path | None = None,
     heartbeat_file_path: Path | None = None,
@@ -68,7 +66,7 @@ def print_help(
     print("Type /role help to manage role cards.")
     print("Type /route help to manage the route mode for this session.")
     print("Type /runtime help to manage runtime options.")
-    print(f"Current session: {session.name}")
+    print(f"Current session: {session.title} [{session.id[:8]}]")
     print(f"Memory support enabled: {'yes' if memory_support is not None else 'no'}")
     if memory_support is not None:
         print(f"Memory workspace: {memory_support.working_dir}")
@@ -90,35 +88,12 @@ def print_help(
     print()
 
 
-async def run_turn(
-    agent: AgentCore,
-    prompt: str,
-    history: list[LLMMessage],
-    *,
-    compressed_summary: str,
-    skill_registry: SkillRegistry | None,
-    tool_registry: ToolRegistry | None,
-    temperature: float | None,
-    max_tokens: int | None,
-) -> AgentRunResult:
-    return await run_agent_turn(
-        agent,
-        prompt,
-        history,
-        compressed_summary=compressed_summary,
-        skill_registry=skill_registry,
-        tool_registry=tool_registry,
-        temperature=temperature,
-        max_tokens=max_tokens,
-    )
-
-
 def build_runtime(
     args: argparse.Namespace,
 ) -> tuple[
     AgentCore,
     SessionStore,
-    ChatSession,
+    Session,
     ToolRegistry | None,
     SkillRegistry | None,
 ]:
@@ -137,9 +112,9 @@ def build_runtime(
     )
 
 
-def read_prompt(session_name: str) -> str | None:
+def read_prompt(session_title: str) -> str | None:
     try:
-        return input(f"You[{session_name}]> ").strip()
+        return input(f"You[{session_title}]> ").strip()
     except EOFError:
         print()
         return None
@@ -158,9 +133,8 @@ async def _main_async(args: argparse.Namespace) -> None:
 
     session_store = context.session_store
     session = context.session
-    session_service = SessionService(
+    session_service = SessionLifecycleService(
         session_store,
-        context.agent_session_store,
         coordinator=context.coordinator,
     )
     tool_registry = context.tool_registry
@@ -168,10 +142,9 @@ async def _main_async(args: argparse.Namespace) -> None:
     coordinator = context.coordinator
     command_context = CliCommandContext(
         coordinator=coordinator,
-        runtime_controls=context.runtime_controls,
-        workspace=context.workspace,
+        settings_service=context.settings_service,
         session_service=session_service,
-        session_name=session.name,
+        session_id=session.id,
     )
     heartbeat_interval_seconds = (
         context.heartbeat_service.interval_seconds
@@ -206,7 +179,7 @@ async def _main_async(args: argparse.Namespace) -> None:
             )
             await context.heartbeat_service.start()
         while True:
-            prompt = await asyncio.to_thread(read_prompt, session.name)
+            prompt = await asyncio.to_thread(read_prompt, session.title)
             if prompt is None:
                 break
 
@@ -215,13 +188,13 @@ async def _main_async(args: argparse.Namespace) -> None:
             if prompt in EXIT_COMMANDS:
                 break
             if prompt in CLEAR_COMMANDS:
-                session = await coordinator.load_session(session.name)
+                session = await coordinator.load_session(session.id)
                 await asyncio.to_thread(clear_history, session_store, session)
                 await asyncio.to_thread(
-                    context.agent_session_store.delete_session,
-                    session.name,
+                    context.session_store.clear_agent_context,
+                    session.id,
                 )
-                command_context.session_name = session.name
+                command_context.session_id = session.id
                 print("History cleared.")
                 print()
                 continue
@@ -235,7 +208,7 @@ async def _main_async(args: argparse.Namespace) -> None:
                 print()
                 continue
             if command_result is not None:
-                session = await coordinator.load_session(command_context.session_name)
+                session = await coordinator.load_session(command_context.session_id)
                 print(command_result.text)
                 print()
                 continue
@@ -244,11 +217,11 @@ async def _main_async(args: argparse.Namespace) -> None:
                 on_chunk, stream_started = _build_streamed_assistant_writer()
 
                 execution = await coordinator.handle_user_turn_stream(
-                    command_context.session_name,
+                    command_context.session_id,
                     prompt,
                     on_chunk=on_chunk,
                     completion_callback=_build_async_cli_notifier(
-                        command_context.session_name
+                        command_context.session_id
                     ),
                 )
             except ValueError as exc:
@@ -261,7 +234,7 @@ async def _main_async(args: argparse.Namespace) -> None:
                 continue
 
             session = execution.session
-            command_context.session_name = session.name
+            command_context.session_id = session.id
             await asyncio.to_thread(save_session_state, session_store, session)
             content = execution.response_text.strip()
             if not content and execution.delegated and not execution.completed:
@@ -308,7 +281,7 @@ def _build_heartbeat_executor(session_runner: SessionAgentRunner):
 
 
 async def _notify_cli_schedule(
-    _session_name: str,
+    _session_id: str,
     kind: str,
     title: str,
     content: str,
@@ -328,10 +301,10 @@ def _build_schedule_notifier(kind: str, title: str):
     return notify
 
 
-def _build_async_cli_notifier(session_name: str):
-    async def notify(job) -> None:
+def _build_async_cli_notifier(session_id: str):
+    async def notify(run) -> None:
         print()
-        print(f"Assistant[{session_name}]> {job.final_response}")
+        print(f"Assistant[{session_id[:8]}]> {run.final_response}")
         print()
 
     return notify
