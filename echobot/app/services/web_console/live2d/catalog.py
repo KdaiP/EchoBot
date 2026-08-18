@@ -124,9 +124,12 @@ class Live2DModelCatalog:
         return f"{candidate.source}:{candidate.model_relative_path.as_posix()}"
 
     def asset_url_for(self, candidate: Live2DModelCandidate, relative_path: str) -> str:
+        # 注意：此处 replace('\\', '/') 不能直接写在 f-string 的表达式内，
+        # 因为 Python < 3.12 不允许 f-string 表达式部分含有反斜杠（PEP 701）
+        normalized = str(relative_path or "").replace("\\", "/")
         return (
             f"/api/web/live2d/{candidate.source}/"
-            f"{quote(str(relative_path or '').replace('\\', '/'), safe='/')}"
+            f"{quote(normalized, safe='/')}"
         )
 
     def directory_name_for(self, candidate: Live2DModelCandidate) -> str:
