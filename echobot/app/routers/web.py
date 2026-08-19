@@ -289,12 +289,19 @@ async def synthesize_tts(
     except RuntimeError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
+    def _safe_header(value: str) -> str:
+        try:
+            value.encode("latin-1")
+            return value
+        except UnicodeEncodeError:
+            return value.encode("utf-8").decode("latin-1")
+
     return Response(
         content=speech.audio_bytes,
         media_type=speech.content_type,
         headers={
-            "X-TTS-Provider": speech.provider,
-            "X-TTS-Voice": speech.voice,
+            "X-TTS-Provider": _safe_header(str(speech.provider)),
+            "X-TTS-Voice": _safe_header(str(speech.voice)),
         },
     )
 

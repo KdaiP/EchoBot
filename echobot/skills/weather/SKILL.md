@@ -8,8 +8,7 @@ description: >
   macOS, and Windows without any setup.
 homepage: "https://wttr.in/:help"
 metadata:
-  echo:
-    emoji: 🌤️
+  echo: '{"emoji": "🌤️"}'
 name: weather
 ---
 
